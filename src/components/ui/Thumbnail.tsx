@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import type { EntityKind, MediaId } from '@/types/domain';
 import { getRepository } from '@/lib/store';
+import { getSupabaseClient, MEDIA_BUCKET } from '@/lib/supabase';
 import { KIND_ACCENT } from '@/lib/taxonomy';
 import { cn } from '@/lib/cn';
 
@@ -76,6 +77,13 @@ export function Thumbnail({
  * every id change: a URL is only rendered when its id still matches the one
  * being asked for.
  */
+/**
+ * Signed-URL lifetime. Long enough that scrolling a timeline never re-signs the
+ * same image, short enough that a leaked URL expires quickly — the bucket is
+ * private and these links are the only way its contents are ever reachable.
+ */
+const SIGNED_URL_TTL_SECONDS = 3600;
+
 export function useMediaUrl(mediaId: MediaId | undefined): string | null {
   const [resolved, setResolved] = useState<{ id: MediaId; url: string } | null>(null);
 
@@ -86,10 +94,28 @@ export function useMediaUrl(mediaId: MediaId | undefined): string | null {
 
     void getRepository()
       .getMedia(mediaId)
-      .then((record) => {
-        if (cancelled || !record?.blob) return;
-        objectUrl = URL.createObjectURL(record.blob);
-        setResolved({ id: mediaId, url: objectUrl });
+      .then(async (record) => {
+        if (cancelled || !record) return;
+
+        // Local blob: the common case, and the only one that works offline.
+        if (record.blob) {
+          objectUrl = URL.createObjectURL(record.blob);
+          setResolved({ id: mediaId, url: objectUrl });
+          return;
+        }
+
+        // Synced from another device — the metadata arrived but the image
+        // itself is still in storage. Fetched lazily and only when actually
+        // rendered, because eagerly pulling every thumbnail an account has
+        // ever recorded would cost hundreds of megabytes on a phone.
+        if (!record.remotePath) return;
+        const supabase = getSupabaseClient();
+        if (!supabase) return;
+        const { data } = await supabase.storage
+          .from(MEDIA_BUCKET)
+          .createSignedUrl(record.remotePath, SIGNED_URL_TTL_SECONDS);
+        if (cancelled || !data?.signedUrl) return;
+        setResolved({ id: mediaId, url: data.signedUrl });
       })
       .catch(() => {
         // A missing or unreadable record simply renders the placeholder.
@@ -98,7 +124,8 @@ export function useMediaUrl(mediaId: MediaId | undefined): string | null {
     return () => {
       cancelled = true;
       // Revoking is essential: without it, scrolling a long list leaks one blob
-      // reference per row and the tab grows without bound.
+      // reference per row and the tab grows without bound. A signed URL is not
+      // an object URL and needs no revocation.
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [mediaId]);

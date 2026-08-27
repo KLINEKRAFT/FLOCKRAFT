@@ -183,6 +183,11 @@ alter table sightings
 -- ===========================================================================
 -- Enabled on every table. Each policy compares auth.uid() to the row's owner,
 -- so a leaked anon key grants nothing without a valid session token.
+--
+-- auth.uid() is wrapped as `(select auth.uid())` deliberately: the bare call is
+-- STABLE, not IMMUTABLE, so Postgres re-evaluates it once per row. The subquery
+-- form is hoisted into a single initplan, which matters on the sightings table
+-- where a timeline read scans thousands of rows.
 
 alter table sessions        enable row level security;
 alter table entities        enable row level security;
@@ -203,19 +208,19 @@ begin
   ]
   loop
     execute format(
-      'create policy %I on %I for select using (auth.uid() = user_id)',
+      'create policy %I on public.%I for select to authenticated using ((select auth.uid()) = user_id)',
       t || '_select_own', t
     );
     execute format(
-      'create policy %I on %I for insert with check (auth.uid() = user_id)',
+      'create policy %I on public.%I for insert to authenticated with check ((select auth.uid()) = user_id)',
       t || '_insert_own', t
     );
     execute format(
-      'create policy %I on %I for update using (auth.uid() = user_id) with check (auth.uid() = user_id)',
+      'create policy %I on public.%I for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id)',
       t || '_update_own', t
     );
     execute format(
-      'create policy %I on %I for delete using (auth.uid() = user_id)',
+      'create policy %I on public.%I for delete to authenticated using ((select auth.uid()) = user_id)',
       t || '_delete_own', t
     );
   end loop;
@@ -229,53 +234,92 @@ $$;
 -- `<user_id>/<media_id>.jpg` and every policy asserts that the first path
 -- segment equals the caller's uid, so one user can never enumerate or read
 -- another's media.
+--
+-- The bucket is also constrained at the storage layer itself: a 5 MB object
+-- cap and an image-only MIME allowlist, so a compromised client cannot turn
+-- private observation storage into general-purpose file hosting.
 
-insert into storage.buckets (id, name, public)
-values ('observations', 'observations', false)
-on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'observations',
+  'observations',
+  false,
+  5242880,
+  array['image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
 
 create policy "observations_read_own"
   on storage.objects for select
+  to authenticated
   using (
     bucket_id = 'observations'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 create policy "observations_insert_own"
   on storage.objects for insert
+  to authenticated
   with check (
     bucket_id = 'observations'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+create policy "observations_update_own"
+  on storage.objects for update
+  to authenticated
+  using (
+    bucket_id = 'observations'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  )
+  with check (
+    bucket_id = 'observations'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 create policy "observations_delete_own"
   on storage.objects for delete
+  to authenticated
   using (
     bucket_id = 'observations'
-    and (storage.foldername(name))[1] = auth.uid()::text
+    and (storage.foldername(name))[1] = (select auth.uid())::text
   );
 
 -- ===========================================================================
 -- Ordinal allocation
 -- ===========================================================================
--- Atomically increments and returns the next per-kind designation number.
--- SECURITY INVOKER so RLS still applies to the underlying table.
+-- Atomically increments and returns the next per-kind designation number, so
+-- two concurrent promotions can never both mint `PERSON 014`.
+--
+-- SECURITY INVOKER so RLS still applies to the underlying table; the function
+-- therefore cannot be used to read or bump another user's counter.
 
-create or replace function next_entity_ordinal(p_kind entity_kind)
+create or replace function public.next_entity_ordinal(p_kind entity_kind)
 returns integer
 language plpgsql
 security invoker
-set search_path = public
+set search_path = ''
 as $$
 declare
   next_value integer;
+  uid uuid := auth.uid();
 begin
-  insert into entity_ordinals (user_id, kind, value)
-  values (auth.uid(), p_kind, 1)
+  if uid is null then
+    raise exception 'next_entity_ordinal requires an authenticated session';
+  end if;
+
+  insert into public.entity_ordinals (user_id, kind, value)
+  values (uid, p_kind, 1)
   on conflict (user_id, kind)
-    do update set value = entity_ordinals.value + 1
+    do update set value = public.entity_ordinals.value + 1
   returning value into next_value;
 
   return next_value;
 end;
 $$;
+
+revoke all on function public.next_entity_ordinal(entity_kind) from public, anon;
+grant execute on function public.next_entity_ordinal(entity_kind) to authenticated;

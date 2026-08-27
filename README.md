@@ -62,12 +62,13 @@ src/
     timeline/           event log
     entities/           entity list and profile
     map/                canvas map renderer
-    settings/           privacy and storage
-  hooks/                camera, pipeline, geolocation, settings, queries
+    settings/           privacy, storage, sync and account
+  hooks/                camera, pipeline, geolocation, settings, sync, queries
   lib/
     vision/             detectors, tracker, attributes, entity matcher
-    store/              repository interface + IndexedDB implementation
-  types/                domain model
+    store/              repository interface, IndexedDB, sync outbox
+    sync/               sync engine and domain↔row mappers
+  types/                domain model + generated database types
 supabase/migrations/    Postgres schema with row-level security
 ```
 
@@ -127,17 +128,78 @@ entity. The sighting is written to storage *at promotion* and updated on close,
 so an interrupted session — tab closed, page reclaimed, battery dead — still
 leaves a coherent record.
 
-### Storage
+### Storage and sync
 
 `ObservationRepository` is the persistence contract. IndexedDB is the primary
 implementation and the source of truth — the app is fully functional with no
 account and no network.
 
-`supabase/migrations/0001_flockraft_schema.sql` defines the Postgres schema for
-sync: every table owner-scoped, RLS enabled with per-user policies, and a
-private storage bucket whose policies assert the path's first segment equals the
-caller's uid. The Supabase repository adapter is the next milestone; the
-selector in `lib/store/index.ts` is the only call site that changes.
+Signing in does **not** swap the store. `SyncingRepository` decorates the local
+one, delegating every read untouched and recording a sync intent on every
+mutation. That choice is the whole point: a network-backed repository would
+have turned every timeline scroll into a round-trip and made the app unusable
+on a bad connection, which is the opposite of what a field tool needs.
+
+```
+        reads ─────────────────────────► IndexedDB   (always local, always fast)
+        writes ──► SyncingRepository ──► IndexedDB
+                          │
+                          └─► outbox ──► SyncEngine ──► Supabase
+```
+
+**Outbox.** Every mutation appends an intent keyed by record id. An outbox
+rather than diffing tables, because a delete leaves no row to diff — without a
+recorded intent, deleting an entity offline would never propagate and the next
+pull would resurrect it. Entries carry identity only, never a payload snapshot,
+so ten rapid edits cost one upload of the final state.
+
+**Push** drains the outbox parents-first (sessions → entities → media →
+sightings → attributes → notes → associations) so a foreign key is never
+dangling. Media blobs upload to the private bucket; thumbnails are linked in a
+second pass once their media row exists.
+
+**Pull** fetches rows whose `updated_at` is newer than the local cursor.
+`updated_at` is maintained by a Postgres trigger rather than the client, so a
+buggy client cannot backdate a row out of another device's view.
+
+Everything is idempotent — every write is an upsert keyed by the record's own
+id — so a push that lands server-side but dies before clearing the outbox
+simply replays harmlessly.
+
+**Conflicts** are last-write-wins, stated as a limitation rather than hidden.
+FLOCKRAFT's records are overwhelmingly append-only: a sighting is written once
+and never edited. The only realistic conflict is the same entity being renamed
+or favourited on two devices while both were offline, and losing one of those
+does not justify a CRDT. What must never be lost is an *observation*, and
+observations cannot conflict — their ids are generated locally and are unique
+per device.
+
+### Authentication
+
+Email magic link only. No password to store, reset, or leak.
+
+Authentication exists for exactly one reason: row-level security needs an
+`auth.uid()` to scope rows to. FLOCKRAFT stays fully usable signed out —
+detection, entity memory and every screen work with no account. Signing in adds
+cross-device sync and nothing else, and while signed out the outbox stays
+empty rather than quietly accumulating.
+
+### Database
+
+`supabase/migrations/` defines the Postgres schema: every table owner-scoped,
+RLS enabled with per-user policies granted only to the `authenticated` role, and
+a private storage bucket whose policies assert the object path's first segment
+equals the caller's uid, with a 5 MB image-only cap.
+
+Policies use `(select auth.uid())` rather than the bare call — `auth.uid()` is
+STABLE, not IMMUTABLE, so the unwrapped form re-evaluates once per row instead
+of being hoisted into a single initplan. That is measurable on a timeline read.
+
+Regenerate types after a schema change:
+
+```bash
+npx supabase gen types typescript --project-id <ref> > src/types/supabase.ts
+```
 
 ### Map
 
@@ -200,9 +262,17 @@ URL.
 
 ## Deploying
 
-Vercel, zero configuration. Set the environment variables from `.env.example` in
-the project settings. HTTPS is mandatory for camera access, which Vercel
+Vercel, zero configuration. HTTPS is mandatory for camera access, which Vercel
 provides by default.
+
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in the
+project settings to enable sync; without them the app runs local-only and says
+so on the settings screen.
+
+For magic links to work, every origin the app is served from — production,
+preview deployments and `http://localhost:3000` — must be listed under
+**Authentication → URL Configuration → Redirect URLs** in Supabase, as
+`<origin>/auth/callback`. A link opened at an unlisted origin bounces.
 
 ---
 
@@ -213,10 +283,14 @@ detection with COCO-SSD, multi-object tracking, dwell-gated observation
 recording, appearance sampling, entity memory with merge and split, timeline
 with filters and activity graph, canvas map, privacy controls, PWA.
 
+Cross-device sync — Postgres schema with RLS, magic-link auth, an offline
+outbox, and a bidirectional sync engine with lazy media fetch.
+
 **Next**
 
-1. Supabase repository adapter and sync, behind the existing interface
-2. Appearance embeddings for occlusion recovery and stronger match proposals
-3. Face bounding boxes and landmarks (boxes only — no identity database)
-4. Event clip capture, opt-in
-5. Natural-language search over the structured filters already in place
+1. Appearance embeddings for occlusion recovery and stronger match proposals
+2. Face bounding boxes and landmarks (boxes only — no identity database)
+3. Event clip capture, opt-in
+4. Natural-language search over the structured filters already in place
+5. Conflict surfacing — show when a pull overwrote a local edit, rather than
+   silently applying last-write-wins
