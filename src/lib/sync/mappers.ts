@@ -2,6 +2,7 @@ import type {
   Association,
   Attribute,
   Entity,
+  EntityProfile,
   GeoFix,
   MediaRecord,
   NormalizedBox,
@@ -67,6 +68,34 @@ export function rowToSession(row: Tables<'sessions'>): Session {
   };
 }
 
+/**
+ * Server JSON is untyped, so each field is validated rather than trusted. A
+ * malformed profile must degrade to "no profile" instead of rendering
+ * `[object Object]` where an operator expects a licence plate.
+ */
+function normalizeProfile(value: Json): EntityProfile | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: EntityProfile = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const field = raw as Record<string, unknown>;
+    if (typeof field.value !== 'string') continue;
+    result[key] = {
+      value: field.value,
+      source: field.source === 'model' ? 'model' : 'user',
+      confidence:
+        typeof field.confidence === 'number' && Number.isFinite(field.confidence)
+          ? Math.min(1, Math.max(0, field.confidence))
+          : 1,
+      observedAt:
+        typeof field.observedAt === 'number' && Number.isFinite(field.observedAt)
+          ? field.observedAt
+          : Date.now(),
+    };
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 /** Server JSON is untyped; missing buckets become zero rather than undefined. */
 function normalizeCounts(value: Json): SessionCounts {
   const raw = (value ?? {}) as Partial<Record<keyof SessionCounts, unknown>>;
@@ -102,6 +131,7 @@ export function entityToRow(entity: Entity, userId: string): TablesInsert<'entit
     thumbnail_id: null,
     merged_from_ids: entity.mergedFromIds ?? [],
     archived_at: entity.archivedAt ? toIso(entity.archivedAt) : null,
+    profile: (entity.profile ?? {}) as unknown as Json,
   };
 }
 
@@ -119,6 +149,7 @@ export function rowToEntity(row: Tables<'entities'>): Entity {
     thumbnailId: row.thumbnail_id ?? undefined,
     mergedFromIds: row.merged_from_ids.length > 0 ? row.merged_from_ids : undefined,
     archivedAt: row.archived_at ? toMs(row.archived_at) : undefined,
+    profile: normalizeProfile(row.profile),
   };
 }
 

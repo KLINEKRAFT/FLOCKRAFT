@@ -13,6 +13,7 @@ import type {
 } from '@/types/domain';
 import { createId } from '@/lib/id';
 import { designationFor } from '@/lib/taxonomy';
+import { seedProfile } from '@/lib/profiles';
 import { cropThumbnail } from '@/lib/vision/capture';
 import { analyzeAppearance } from '@/lib/vision/attributes';
 import { proposeMatch } from '@/lib/vision/entityMatcher';
@@ -254,6 +255,8 @@ export class ObservationRecorder {
       sightingCount: 1,
       favorite: false,
       summary: summarize(attributes),
+      // Only what the detector genuinely established — see `seedProfile`.
+      profile: seedProfile(track.kind, track.class),
     };
     await repository.upsertEntity(entity);
 

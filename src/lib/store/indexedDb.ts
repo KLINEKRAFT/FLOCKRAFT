@@ -17,6 +17,7 @@ import type {
 import { createId } from '@/lib/id';
 import type { OutboxEntry } from './outbox';
 import { designationFor } from '@/lib/taxonomy';
+import { profileSearchText } from '@/lib/profiles';
 import {
   matchesSearch,
   type DeleteCascade,
@@ -134,7 +135,12 @@ export class IndexedDbRepository implements ObservationRepository {
       if (entity.archivedAt) return false;
       if (filter.kind && entity.kind !== filter.kind) return false;
       if (filter.favorite && !entity.favorite) return false;
-      return matchesSearch([entity.label, entity.class, entity.summary ?? ''], filter.search);
+      // Profile values are part of the searchable surface: an operator looking
+      // for a plate or a make/model expects the entity list to find it.
+      return matchesSearch(
+        [entity.label, entity.class, entity.summary ?? '', ...profileSearchText(entity)],
+        filter.search,
+      );
     });
 
     const sort = filter.sort ?? 'recent';
@@ -325,7 +331,14 @@ export class IndexedDbRepository implements ObservationRepository {
       if (filter.until && sighting.startedAt > filter.until) continue;
 
       const attributeText = sighting.attributes.map((a) => `${a.key} ${a.value}`);
-      if (!matchesSearch([entity.label, sighting.class, ...attributeText], filter.search)) continue;
+      if (
+        !matchesSearch(
+          [entity.label, sighting.class, ...attributeText, ...profileSearchText(entity)],
+          filter.search,
+        )
+      ) {
+        continue;
+      }
 
       events.push({
         id: sighting.id,

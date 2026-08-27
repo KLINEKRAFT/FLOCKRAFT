@@ -8,6 +8,7 @@ import {
   MapPin,
   MessageSquarePlus,
   Split,
+  SquarePen,
   Star,
   Trash2,
   Undo2,
@@ -26,7 +27,10 @@ import { Toggle } from '@/components/ui/Controls';
 import { getRepository, FULL_CASCADE, type DeleteCascade } from '@/lib/store';
 import { useRepositoryQuery } from '@/hooks/useRepositoryQuery';
 import { useNow } from '@/hooks/useNow';
+import { useSync } from '@/hooks/useSync';
 import { ATTRIBUTE_LABEL, describeAttribute } from '@/lib/vision/attributes';
+import { populatedFields, profileFieldsFor } from '@/lib/profiles';
+import { ProfileEditor } from './ProfileEditor';
 import { DIRECTION_LABEL } from '@/lib/vision/tracker';
 import {
   formatConfidence,
@@ -54,6 +58,7 @@ export function EntityProfile({ entityId }: { entityId: string }) {
   const router = useRouter();
   const [splitMode, setSplitMode] = useState(false);
   const [selectedSightings, setSelectedSightings] = useState<string[]>([]);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
   const [noteOpen, setNoteOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -82,17 +87,29 @@ export function EntityProfile({ entityId }: { entityId: string }) {
 
   const { data, loading, error, refresh } = useRepositoryQuery(query);
   const now = useNow(15_000);
+  const { user } = useSync();
 
   const observationDays = useMemo(
     () => (data ? groupAttributesByDay(data.attributes) : []),
     [data],
   );
 
+  const profileRows = useMemo(() => (data ? populatedFields(data.entity) : []), [data]);
+
   const toggleFavorite = useCallback(async () => {
     if (!data) return;
     await getRepository().upsertEntity({ ...data.entity, favorite: !data.entity.favorite });
     refresh();
   }, [data, refresh]);
+
+  const saveProfile = useCallback(
+    async (profile: Entity['profile']) => {
+      if (!data) return;
+      await getRepository().upsertEntity({ ...data.entity, profile });
+      refresh();
+    },
+    [data, refresh],
+  );
 
   const submitNote = useCallback(async () => {
     const body = noteDraft.trim();
@@ -104,7 +121,9 @@ export function EntityProfile({ entityId }: { entityId: string }) {
         entityId: data.entity.id,
         body,
         createdAt: Date.now(),
-        author: 'Operator',
+        // Attribution matters once notes sync across devices: "Operator" is
+        // ambiguous the moment a second device writes one.
+        author: user?.email ?? 'Operator',
       });
       setNoteDraft('');
       setNoteOpen(false);
@@ -112,7 +131,7 @@ export function EntityProfile({ entityId }: { entityId: string }) {
     } finally {
       setBusy(false);
     }
-  }, [noteDraft, data, refresh]);
+  }, [noteDraft, data, refresh, user]);
 
   const performSplit = useCallback(async () => {
     if (selectedSightings.length === 0) return;
@@ -241,6 +260,61 @@ export function EntityProfile({ entityId }: { entityId: string }) {
             <SectionLabel className="mt-6">Confidence history</SectionLabel>
             <ConfidenceHistory sightings={sightings} />
           </>
+        )}
+
+        {/* ---- Operator-recorded profile ---- */}
+        <SectionLabel
+          className="mt-6"
+          action={
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setProfileOpen(true)}
+              icon={<SquarePen aria-hidden className="size-3" />}
+            >
+              {profileRows.length > 0 ? 'Edit' : 'Add details'}
+            </Button>
+          }
+        >
+          Profile
+        </SectionLabel>
+
+        {profileRows.length === 0 ? (
+          <Panel className="px-3 py-4">
+            <p className="text-[12px] leading-relaxed text-slate">
+              {emptyProfileHint(entity.kind)}
+            </p>
+          </Panel>
+        ) : (
+          <Panel className="px-3 py-1">
+            <dl>
+              {profileRows.map(({ def, field }) => (
+                <div
+                  key={def.key}
+                  className="flex items-baseline justify-between gap-4 border-b border-hairline py-2.5 last:border-b-0"
+                >
+                  <dt className="fk-label shrink-0">{def.label}</dt>
+                  <dd className="min-w-0 text-right">
+                    <span
+                      className={cn(
+                        'text-[13px] break-words text-bone',
+                        def.type === 'plate' && 'tabular font-mono tracking-[0.12em]',
+                      )}
+                    >
+                      {field.value}
+                    </span>
+                    {/* Provenance is shown only where it is not the default:
+                        an operator entry is the norm, a detected value is not. */}
+                    {field.source === 'model' && (
+                      <span className="ml-2 font-mono text-[9px] tracking-[0.12em] text-slate uppercase">
+                        detected {formatConfidence(field.confidence)}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </Panel>
         )}
 
         {/* ---- Appearance observations ---- */}
@@ -441,6 +515,13 @@ export function EntityProfile({ entityId }: { entityId: string }) {
           </>
         )}
       </div>
+
+      <ProfileEditor
+        entity={entity}
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        onSave={saveProfile}
+      />
 
       {/* ---- Note composer ---- */}
       <Sheet
@@ -724,6 +805,14 @@ function NoteRow({ note, onDeleted }: { note: Note; onDeleted: () => void }) {
       </Panel>
     </li>
   );
+}
+
+/** Names the fields this kind supports, so the empty state is actionable. */
+function emptyProfileHint(kind: Entity['kind']): string {
+  const labels = profileFieldsFor(kind)
+    .slice(0, 4)
+    .map((def) => def.label.toLowerCase());
+  return `Nothing recorded yet. Add ${labels.join(', ')} and more.`;
 }
 
 interface AttributeDay {

@@ -223,6 +223,32 @@ export interface Association {
   lastObservedAt: number;
 }
 
+/**
+ * One field of an entity profile, carrying its provenance.
+ *
+ * Provenance is not decoration. A colour sampled by the detector and a licence
+ * plate typed by an operator are different kinds of claim, and the interface
+ * must never present them as the same thing. `source` is what lets it show a
+ * measured reading with a confidence and an operator's entry as fact.
+ */
+export interface ProfileField {
+  value: string;
+  source: 'model' | 'user';
+  /** 0..1 for model readings; always 1 for an operator entry. */
+  confidence: number;
+  observedAt: number;
+}
+
+/**
+ * Structured profile for an entity, keyed by field id.
+ *
+ * Deliberately a flat map rather than a per-kind interface: the field set is
+ * declared once in `lib/profiles.ts` and drives storage, editing, display and
+ * search from a single source. Adding a field to a kind is a one-line change
+ * there, not a change in five files.
+ */
+export type EntityProfile = Record<string, ProfileField>;
+
 export interface Entity {
   id: EntityId;
   /** Stable display designation, e.g. `PERSON 014`. */
@@ -237,6 +263,8 @@ export interface Entity {
   mergedFromIds?: EntityId[];
   /** Short user-facing descriptor derived from high-confidence attributes. */
   summary?: string;
+  /** Operator-maintained structured fields. See `lib/profiles.ts`. */
+  profile?: EntityProfile;
   thumbnailId?: MediaId;
   archivedAt?: number;
 }
