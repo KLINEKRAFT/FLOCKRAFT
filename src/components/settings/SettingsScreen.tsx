@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AlertTriangle, Eye, HardDrive, ScanFace, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Eye, HardDrive, ScanFace, ShieldCheck } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { Panel, Divider, SectionLabel } from '@/components/ui/Panel';
 import { SegmentedControl, Toggle } from '@/components/ui/Controls';
@@ -16,6 +16,9 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import { SyncPanel } from './SyncPanel';
 import { ExportPanel } from './ExportPanel';
 import { formatBytes } from '@/lib/format';
+import { cn } from '@/lib/cn';
+import { RETENTION_CHOICES, RETENTION_LABEL } from '@/lib/settings';
+import { describePurge, sweepIfDue } from '@/lib/retention';
 import {
   FACE_SENSITIVITY,
   FACE_SENSITIVITY_HINT,
@@ -34,11 +37,57 @@ import {
  *  3. Deletion is easy and complete. Purging is one action away, and it is
  *     genuinely destructive rather than a soft archive.
  */
+function RetentionRow({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  onChange: (days: number) => void;
+}) {
+  return (
+    <div className="px-3 py-3">
+      <p className="font-mono text-[11px] tracking-[0.1em] text-bone uppercase">{label}</p>
+      <p className="mt-1.5 text-[12px] leading-relaxed text-ash">{description}</p>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="mt-2.5 flex flex-wrap gap-1.5"
+      >
+        {RETENTION_CHOICES.map((days) => {
+          const active = value === days;
+          return (
+            <button
+              key={days}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(days)}
+              className={cn(
+                'min-h-11 rounded-sm border px-3 font-mono text-[11px] tracking-[0.1em] uppercase transition-colors',
+                active
+                  ? 'border-tactical/50 bg-tactical/15 text-tactical'
+                  : 'border-hairline bg-gunmetal text-slate hover:text-bone',
+              )}
+            >
+              {RETENTION_LABEL[days]}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsScreen() {
   const { settings, update, reset } = useSettings();
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [facePurgeOpen, setFacePurgeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [sweepNote, setSweepNote] = useState<string | null>(null);
 
   const usageQuery = useCallback(() => getRepository().usage(), []);
   const { data: usage, refresh } = useRepositoryQuery(usageQuery);
@@ -64,6 +113,19 @@ export function SettingsScreen() {
       setBusy(false);
     }
   }, [refresh]);
+
+  // Runs the sweep immediately rather than waiting for the next scheduled one,
+  // so choosing a window has a visible, verifiable effect right away.
+  const sweepNow = useCallback(async () => {
+    setBusy(true);
+    try {
+      const result = await sweepIfDue(getRepository(), settings, Date.now(), { force: true });
+      setSweepNote(result ? describePurge(result) : 'Nothing was old enough to remove');
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, settings]);
 
   return (
     <>
@@ -257,7 +319,45 @@ export function SettingsScreen() {
           )}
         </Panel>
 
-        <div className="mt-3 flex flex-wrap gap-2">
+        <SectionLabel className="mt-6">Retention</SectionLabel>
+        <Panel className="divide-y divide-hairline">
+          <RetentionRow
+            label="Delete observations older than"
+            description="Sightings, sessions and their images. Favourited subjects and any subject you have written a note on are never removed."
+            value={settings.retentionDays}
+            onChange={(retentionDays) => update({ retentionDays })}
+          />
+          <RetentionRow
+            label="Delete face signatures older than"
+            description="Biometric templates only. Removing them does not remove the subject, their sightings or their images."
+            value={settings.faceRetentionDays}
+            onChange={(faceRetentionDays) => update({ faceRetentionDays })}
+          />
+        </Panel>
+
+        <div className="mt-2 flex items-start gap-2 px-1">
+          <CalendarClock aria-hidden className="mt-0.5 size-3 shrink-0 text-slate" />
+          <p className="text-[11px] leading-relaxed text-slate">
+            Both default to Never — nothing is deleted until you choose a window. A sweep runs
+            when the app opens, at most once an hour. Deletions sync, so a window set here
+            applies to your account on every signed-in device.
+          </p>
+        </div>
+
+        {(settings.retentionDays > 0 || settings.faceRetentionDays > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => void sweepNow()}>
+              {busy ? 'Sweeping…' : 'Run sweep now'}
+            </Button>
+            {sweepNote && (
+              <span role="status" className="font-mono text-[11px] text-tactical">
+                {sweepNote}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="mt-6 flex flex-wrap gap-2">
           <Button variant="secondary" onClick={refresh} icon={<HardDrive aria-hidden className="size-3.5" />}>
             Refresh usage
           </Button>

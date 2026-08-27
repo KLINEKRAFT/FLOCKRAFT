@@ -17,6 +17,8 @@ import type { IndexedDbRepository } from './indexedDb';
 import { outboxEntryId, type OutboxTable } from './outbox';
 import type {
   DeleteCascade,
+  PurgeCutoffs,
+  PurgeResult,
   EntityFilter,
   ObservationRepository,
   StorageUsage,
@@ -275,6 +277,25 @@ export class SyncingRepository implements ObservationRepository {
   async deleteMedia(id: MediaId): Promise<void> {
     await this.local.deleteMedia(id);
     await this.#track('media', 'delete', id);
+  }
+
+  /**
+   * A retention sweep, with every deletion recorded for the remote.
+   *
+   * Without this the sweep would clear the device and the very next pull would
+   * restore all of it: the remote still holds rows the local store no longer
+   * has, and nothing would have told it they were meant to go. A retention
+   * policy that silently un-deletes itself is worse than none, because the
+   * operator believes it worked.
+   */
+  async purgeExpired(cutoffs: PurgeCutoffs): Promise<PurgeResult> {
+    const result = await this.local.purgeExpired(cutoffs);
+    for (const id of result.sightings) await this.#track('sightings', 'delete', id);
+    for (const id of result.entities) await this.#track('entities', 'delete', id);
+    for (const id of result.sessions) await this.#track('sessions', 'delete', id);
+    for (const id of result.media) await this.#track('media', 'delete', id);
+    for (const id of result.faceEmbeddings) await this.#track('face_embeddings', 'delete', id);
+    return result;
   }
 
   /* ---- Maintenance ------------------------------------------------------ */

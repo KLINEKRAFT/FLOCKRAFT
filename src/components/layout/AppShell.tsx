@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { BottomNavigation, NavigationRail } from './BottomNavigation';
 import { OfflineBanner } from './OfflineBanner';
+import { useRetentionSweep } from '@/hooks/useRetentionSweep';
 import { cn } from '@/lib/cn';
 
 /**
@@ -20,6 +21,10 @@ import { cn } from '@/lib/cn';
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const isLive = pathname === '/';
+
+  // Retention is a promise about the whole store, so it is honoured from the
+  // shell rather than from whichever screen happens to be open.
+  useRetentionSweep();
 
   return (
     <div className="relative flex min-h-dvh flex-col lg:pl-[76px]">

@@ -20,10 +20,13 @@ import type { OutboxEntry } from './outbox';
 import { designationFor } from '@/lib/taxonomy';
 import { profileSearchText } from '@/lib/profiles';
 import {
+  FULL_CASCADE,
   matchesSearch,
   type DeleteCascade,
   type EntityFilter,
   type ObservationRepository,
+  type PurgeCutoffs,
+  type PurgeResult,
   type StorageUsage,
   type TimelineFilter,
 } from './repository';
@@ -567,6 +570,111 @@ export class IndexedDbRepository implements ObservationRepository {
   }
 
   /* ---- Maintenance ------------------------------------------------------ */
+
+  /**
+   * Applies a retention policy.
+   *
+   * Three rules shape what survives, and each exists because the obvious
+   * implementation loses something the operator would not expect to lose:
+   *
+   *   Favourites and annotated subjects are exempt. Starring a subject or
+   *   writing a note on one is an explicit "keep this"; a date-based sweep
+   *   that ignored those signals would delete precisely the records the
+   *   operator cared enough to touch.
+   *
+   *   Old sightings are removed from subjects that are still active, not just
+   *   from dormant ones. "Delete observations older than 30 days" means the
+   *   observations, not only the subjects — a regular visitor should not carry
+   *   an unbounded history simply because they keep coming back.
+   *
+   *   Counts are recomputed for survivors. An entity whose early sightings
+   *   were swept would otherwise keep claiming them, and `firstSeenAt` would
+   *   point at a record that no longer exists.
+   */
+  async purgeExpired(cutoffs: PurgeCutoffs): Promise<PurgeResult> {
+    const db = await this.#open();
+    const result: PurgeResult = {
+      sightings: [],
+      entities: [],
+      sessions: [],
+      media: [],
+      faceEmbeddings: [],
+    };
+
+    if (cutoffs.faceEmbeddingsBefore) {
+      for (const record of await db.getAll('faceEmbeddings')) {
+        if (record.createdAt >= cutoffs.faceEmbeddingsBefore) continue;
+        await db.delete('faceEmbeddings', record.id);
+        result.faceEmbeddings.push(record.id);
+      }
+    }
+
+    const before = cutoffs.observationsBefore;
+    if (!before) return result;
+
+    // Subjects the operator has deliberately invested in are never swept.
+    const protectedIds = new Set<EntityId>();
+    for (const entity of await db.getAll('entities')) {
+      if (entity.favorite) protectedIds.add(entity.id);
+    }
+    for (const note of await db.getAll('notes')) protectedIds.add(note.entityId);
+
+    const touched = new Set<EntityId>();
+    for (const sighting of await db.getAll('sightings')) {
+      if (sighting.endedAt >= before) continue;
+      if (protectedIds.has(sighting.entityId)) continue;
+      if (sighting.thumbnailId) {
+        await db.delete('media', sighting.thumbnailId);
+        result.media.push(sighting.thumbnailId);
+      }
+      await db.delete('sightings', sighting.id);
+      result.sightings.push(sighting.id);
+      touched.add(sighting.entityId);
+    }
+
+    for (const attribute of await db.getAll('attributes')) {
+      if (!attribute.sightingId) continue;
+      if (!result.sightings.includes(attribute.sightingId)) continue;
+      await db.delete('attributes', attribute.id);
+    }
+
+    for (const session of await db.getAll('sessions')) {
+      const ended = session.endedAt ?? session.startedAt;
+      if (ended >= before) continue;
+      await db.delete('sessions', session.id);
+      result.sessions.push(session.id);
+    }
+
+    // A subject with nothing left to show for it is removed entirely; one that
+    // still has recent sightings has its totals corrected instead.
+    for (const entityId of touched) {
+      const remaining = await db.getAllFromIndex('sightings', 'entityId', entityId);
+      const entity = await db.get('entities', entityId);
+      if (!entity) continue;
+
+      if (remaining.length === 0) {
+        await this.deleteEntity(entityId, FULL_CASCADE);
+        result.entities.push(entityId);
+        continue;
+      }
+
+      await db.put(
+        'entities',
+        withFavoriteKey({
+          ...entity,
+          sightingCount: remaining.length,
+          firstSeenAt: Math.min(...remaining.map((s) => s.startedAt)),
+          lastSeenAt: Math.max(...remaining.map((s) => s.endedAt)),
+          // The representative image may have been one of the swept ones.
+          thumbnailId: result.media.includes(entity.thumbnailId ?? '')
+            ? remaining.find((s) => s.thumbnailId)?.thumbnailId
+            : entity.thumbnailId,
+        }),
+      );
+    }
+
+    return result;
+  }
 
   async usage(): Promise<StorageUsage> {
     const db = await this.#open();
