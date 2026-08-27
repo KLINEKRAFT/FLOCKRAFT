@@ -17,6 +17,7 @@ import { seedProfile } from '@/lib/profiles';
 import { cropThumbnail } from '@/lib/vision/capture';
 import { analyzeAppearance } from '@/lib/vision/attributes';
 import { proposeMatch } from '@/lib/vision/entityMatcher';
+import { CandidatePool } from '@/lib/vision/candidatePool';
 import type { ObservationRepository } from '@/lib/store';
 import type { FlockraftSettings } from '@/lib/settings';
 
@@ -68,14 +69,20 @@ export class ObservationRecorder {
   /** Tracks currently held open, keyed by track id. */
   #open = new Map<string, OpenObservation>();
   #counts: SessionCounts = { person: 0, vehicle: 0, animal: 0, object: 0, newEntities: 0 };
-  /** Entities touched this session, used to scope match proposals. */
-  #recentEntities = new Map<EntityId, Entity>();
+  /**
+   * Match candidates, drawn from the durable store rather than from this
+   * session's own work. Scoping candidates to the session made recognising a
+   * returning subject impossible — see `lib/vision/candidatePool.ts`.
+   */
+  #candidates: CandidatePool;
   /** Entity pairs already credited with a co-occurrence, per overlap. */
   #recordedPairs = new Set<string>();
-  #attributeCache = new Map<EntityId, Attribute[]>();
+  /** Tracks whose proposal the operator rejected; never re-proposed. */
+  #rejectedTracks = new Set<string>();
 
   constructor(context: RecorderContext) {
     this.#context = context;
+    this.#candidates = new CandidatePool(context.repository);
   }
 
   get counts(): SessionCounts {
@@ -121,7 +128,12 @@ export class ObservationRecorder {
         continue;
       }
 
-      if (dwell < settings.observationThresholdMs) continue;
+      if (dwell < settings.observationThresholdMs) {
+        // Warm the candidate pool while the track is still earning its dwell,
+        // so promotion does not have to wait on storage.
+        if (settings.autoEntityMatching) this.#candidates.prefetch(track.kind, now);
+        continue;
+      }
 
       await this.#promote(track, sources, now);
     }
@@ -213,9 +225,18 @@ export class ObservationRecorder {
 
     open.entityId = targetEntityId;
     open.isNewEntity = false;
-    this.#recentEntities.delete(provisionalId);
+    this.#candidates.forget(provisionalId, target.kind);
     // The provisional entity inflated the session's new-entity counter.
     this.#counts.newEntities = Math.max(0, this.#counts.newEntities - 1);
+  }
+
+  /**
+   * Dismisses a proposal. The provisional entity stands as its own subject and
+   * the track is never proposed against again, so a rejected suggestion cannot
+   * reappear a few seconds later and be asked a second time.
+   */
+  rejectMatch(trackId: string): void {
+    this.#rejectedTracks.add(trackId);
   }
 
   /* ---- internals -------------------------------------------------------- */
@@ -252,10 +273,15 @@ export class ObservationRecorder {
 
     // Propose — never assume — an identity match.
     let candidate = track.candidateMatch;
-    if (settings.autoEntityMatching && !candidate) {
+    if (settings.autoEntityMatching && !candidate && !this.#rejectedTracks.has(track.id)) {
+      const pool = await this.#candidates.candidates(track.kind, now);
+      // An entity currently held open by another track is, by definition, a
+      // different subject: both are in frame at once. Proposing one as a match
+      // for the other would be wrong no matter how similar they look.
+      const openEntityIds = new Set([...this.#open.values()].map((o) => o.entityId));
       const proposal = proposeMatch(track, {
-        entities: [...this.#recentEntities.values()],
-        attributesByEntity: this.#attributeCache,
+        entities: pool.entities.filter((entity) => !openEntityIds.has(entity.id)),
+        attributesByEntity: pool.attributesByEntity,
         observedAttributes: attributes,
         now,
       });
@@ -331,8 +357,9 @@ export class ObservationRecorder {
     });
     if (bound.length > 0) await repository.addAttributes(bound);
 
-    this.#recentEntities.set(entity.id, entity);
-    this.#attributeCache.set(entity.id, bound);
+    // Matchable immediately, so a subject who steps out of frame and returns
+    // within the pool's refresh window is still a candidate.
+    this.#candidates.remember(entity, bound);
     this.#counts[track.kind] += 1;
     this.#counts.newEntities += 1;
 
@@ -424,7 +451,7 @@ export class ObservationRecorder {
       summary: entity.summary ?? summarize(attributes),
     };
     await repository.upsertEntity(updated);
-    this.#recentEntities.set(updated.id, updated);
+    this.#candidates.remember(updated, attributes);
 
     return { sighting, entity: updated, isNewEntity: open.isNewEntity };
   }

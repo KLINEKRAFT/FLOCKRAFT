@@ -15,6 +15,7 @@ import { DetectionOverlay } from './DetectionOverlay';
 import { SessionSummary } from './SessionSummary';
 import { LiveEventsPanel } from './LiveEventsPanel';
 import { DetectionSettingsSheet } from './DetectionSettingsSheet';
+import { MatchPrompt } from './MatchPrompt';
 import { useCamera } from '@/hooks/useCamera';
 import { useSettings } from '@/hooks/useSettings';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
@@ -132,6 +133,21 @@ export function LiveScreen() {
     }
   };
 
+  const { confirmMatch, rejectMatch } = pipeline;
+
+  const onConfirmMatch = useCallback(
+    async (trackId: string) => {
+      try {
+        await confirmMatch(trackId);
+        setToast('Match confirmed');
+      } catch (error) {
+        logError('store', error);
+        setToast('Could not confirm match');
+      }
+    },
+    [confirmMatch],
+  );
+
   const onSelectTrack = useCallback((track: Track) => {
     setSelectedTrackId((current) => (current === track.id ? null : track.id));
   }, []);
@@ -153,6 +169,22 @@ export function LiveScreen() {
 
   const overlayVisible =
     settings.showOverlays && pipeline.status === 'running' && camera.status === 'active';
+
+  /*
+   * One proposal at a time, oldest first.
+   *
+   * Two subjects can qualify in the same second, and stacking their prompts
+   * would put two irreversible decisions on screen at once, over the very feed
+   * the operator needs to look at to answer either. Queuing keeps the decision
+   * singular; the rest reappear as each is resolved.
+   */
+  const pendingMatch = useMemo(
+    () =>
+      pipeline.tracks
+        .filter((track) => track.candidateMatch)
+        .sort((a, b) => a.firstSeenAt - b.firstSeenAt)[0] ?? null,
+    [pipeline.tracks],
+  );
 
   // Compact fix state for the narrow strip; the coordinates themselves appear
   // in a separate field once the viewport can hold them.
@@ -323,6 +355,15 @@ export function LiveScreen() {
               <div className="absolute inset-0 flex items-center justify-center bg-void/45">
                 <StatusBadge tone="caution">Detection paused</StatusBadge>
               </div>
+            )}
+
+            {pendingMatch && (
+              <MatchPrompt
+                className="absolute inset-x-0 bottom-20 mx-auto max-w-sm px-4"
+                track={pendingMatch}
+                onConfirm={() => void onConfirmMatch(pendingMatch.id)}
+                onReject={() => rejectMatch(pendingMatch.id)}
+              />
             )}
 
             <CameraControls

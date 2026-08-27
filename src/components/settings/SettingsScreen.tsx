@@ -14,6 +14,7 @@ import { useRepositoryQuery } from '@/hooks/useRepositoryQuery';
 import { getRepository } from '@/lib/store';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { SyncPanel } from './SyncPanel';
+import { ExportPanel } from './ExportPanel';
 import { formatBytes } from '@/lib/format';
 
 /**
@@ -90,7 +91,7 @@ export function SettingsScreen() {
           <Divider />
           <Toggle
             label="Save images"
-            description="Store a representative thumbnail per sighting, roughly 4–8 KB each."
+            description="Store a representative thumbnail per sighting. Resolution and its storage cost are set in the detection sheet on the live screen."
             checked={settings.saveImages}
             disabled={!settings.saveObservations}
             onChange={(saveImages) => update({ saveImages })}
@@ -199,6 +200,8 @@ export function SettingsScreen() {
             Delete all data
           </Button>
         </div>
+
+        <ExportPanel />
 
         <SyncPanel />
       </div>

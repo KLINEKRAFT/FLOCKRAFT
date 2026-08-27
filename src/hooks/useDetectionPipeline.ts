@@ -69,6 +69,10 @@ export interface UseDetectionPipelineResult {
   error: string | null;
   sessionId: string | null;
   retryModel: () => void;
+  /** Binds the track's open observation to the proposed entity. */
+  confirmMatch: (trackId: string) => Promise<void>;
+  /** Dismisses the proposal; the provisional entity stands on its own. */
+  rejectMatch: (trackId: string) => void;
 }
 
 const INITIAL_STATS: PipelineStats = { fps: 0, inferenceMs: 0, throttled: false, frames: 0 };
@@ -121,6 +125,39 @@ export function useDetectionPipeline({
   const retryModel = useCallback(() => {
     setError(null);
     setRetryToken((token) => token + 1);
+  }, []);
+
+  /*
+   * Match resolution.
+   *
+   * The recorder owns the durable side — re-pointing the sighting, folding the
+   * provisional entity away. The track object is the live side and is updated
+   * here so the overlay stops offering a decision that has been made. Both are
+   * needed: updating only the track would leave the store wrong, and updating
+   * only the store would leave the prompt on screen.
+   */
+  const confirmMatch = useCallback(async (trackId: string) => {
+    const recorder = recorderRef.current;
+    const track = trackerRef.current?.tracks.find((candidate) => candidate.id === trackId);
+    const proposal = track?.candidateMatch;
+    if (!recorder || !track || !proposal) return;
+
+    await recorder.confirmMatch(trackId, proposal.entityId);
+    track.candidateMatch = undefined;
+    track.entityId = proposal.entityId;
+    track.label = proposal.entityLabel;
+    setTracks(trackerRef.current?.tracks ?? []);
+    setCounts(recorder.counts);
+  }, []);
+
+  const rejectMatch = useCallback((trackId: string) => {
+    const recorder = recorderRef.current;
+    const track = trackerRef.current?.tracks.find((candidate) => candidate.id === trackId);
+    if (!recorder || !track) return;
+
+    recorder.rejectMatch(trackId);
+    track.candidateMatch = undefined;
+    setTracks(trackerRef.current?.tracks ?? []);
   }, []);
 
   useEffect(() => {
@@ -314,5 +351,7 @@ export function useDetectionPipeline({
     error,
     sessionId,
     retryModel,
+    confirmMatch,
+    rejectMatch,
   };
 }
