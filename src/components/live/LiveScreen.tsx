@@ -16,11 +16,13 @@ import { SessionSummary } from './SessionSummary';
 import { LiveEventsPanel } from './LiveEventsPanel';
 import { DetectionSettingsSheet } from './DetectionSettingsSheet';
 import { MatchPrompt } from './MatchPrompt';
+import { ResizeHandle } from './ResizeHandle';
 import { useCamera } from '@/hooks/useCamera';
 import { useSettings } from '@/hooks/useSettings';
 import { usePageVisibility } from '@/hooks/usePageVisibility';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { useDetectionPipeline } from '@/hooks/useDetectionPipeline';
+import { usePanelWidth } from '@/hooks/usePanelWidth';
 import type { RecordedObservation } from '@/lib/observationRecorder';
 import type { Track } from '@/types/domain';
 import { captureSnapshot } from '@/lib/vision/capture';
@@ -45,6 +47,7 @@ export function LiveScreen() {
   const camera = useCamera();
   const { settings, update: updateSettings, hydrated } = useSettings();
   const visible = usePageVisibility();
+  const panel = usePanelWidth();
   const geo = useGeolocation(settings.saveLocation);
 
   const [paused, setPaused] = useState(false);
@@ -281,7 +284,7 @@ export function LiveScreen() {
         </div>
       </TopBar>
 
-      <div className="flex flex-1 flex-col lg:flex-row lg:gap-px lg:bg-hairline">
+      <div className="flex flex-1 flex-col lg:flex-row">
         {/* ---- Camera column ---- */}
         <section className="relative flex-1 lg:min-h-0" aria-label="Camera">
           <CameraStage
@@ -383,9 +386,17 @@ export function LiveScreen() {
           </CameraStage>
         </section>
 
-        {/* ---- Intel column: inline on mobile, fixed rail on desktop ---- */}
+        <ResizeHandle width={panel.width} onWidth={panel.setWidth} onReset={panel.reset} />
+
+        {/*
+          Intel column: stacked under the camera on mobile, a resizable rail on
+          desktop. The inline width is applied only once the stored value has
+          hydrated — rendering it on the server would emit a width the markup
+          cannot know, and React would flag the mismatch.
+        */}
         <aside
-          className="flex flex-col bg-void lg:w-[380px] lg:shrink-0 lg:overflow-y-auto xl:w-[420px]"
+          className="flex flex-col border-hairline bg-void lg:w-[var(--panel-w,380px)] lg:shrink-0 lg:overflow-y-auto"
+          style={panel.hydrated ? { ['--panel-w']: `${panel.width}px` } as React.CSSProperties : undefined}
           aria-label="Session intelligence"
         >
           <SessionSummary counts={pipeline.counts} className="border-b border-hairline" />
