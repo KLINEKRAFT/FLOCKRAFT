@@ -1,0 +1,44 @@
+{
+  "name": "FLOCKRAFT",
+  "short_name": "FLOCKRAFT",
+  "description": "Visual observation and memory system. Detect, track, describe and remember what the camera sees.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07090a",
+  "theme_color": "#07090a",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Live", "url": "/", "description": "Open the camera" },
+    { "name": "Timeline", "url": "/timeline", "description": "Observation log" },
+    { "name": "Entities", "url": "/entities", "description": "Long-term memory" }
+  ]
+}

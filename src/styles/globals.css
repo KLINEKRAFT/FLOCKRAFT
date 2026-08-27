@@ -1,0 +1,251 @@
+@import 'tailwindcss';
+
+/*
+ * FLOCKRAFT DESIGN SYSTEM
+ * ---------------------------------------------------------------------------
+ * A restrained, high-contrast operational palette. Near-black grounds, gunmetal
+ * panels, a single tactical-green accent for system/affirmative state, and a
+ * muted amber reserved exclusively for person-class observations so that human
+ * subjects are always visually distinguishable from materiel.
+ *
+ * Colour is never the sole carrier of meaning — every status also carries a
+ * glyph or a text label (see StatusBadge).
+ */
+
+@theme {
+  /* ---- Ground & panel layering ------------------------------------------ */
+  --color-void: #07090a; /* app background, below everything */
+  --color-abyss: #0b0e10; /* primary surface */
+  --color-charcoal: #12161a; /* panel surface */
+  --color-gunmetal: #1a2026; /* raised panel / input surface */
+  --color-graphite: #232b32; /* hover / pressed */
+  --color-hairline: #2b343c; /* 1px structural borders */
+  --color-hairline-strong: #3a454e;
+
+  /* ---- Typography -------------------------------------------------------- */
+  --color-bone: #e8eaec; /* primary text */
+  --color-ash: #9aa4ad; /* secondary text */
+  --color-slate: #6b757e; /* tertiary / disabled */
+  --color-shadowtext: #49525a; /* faintest label */
+
+  /* ---- Accents ----------------------------------------------------------- */
+  --color-tactical: #7ee08a; /* system green — live, nominal, confirmed */
+  --color-tactical-dim: #3f7a48;
+  --color-tactical-wash: #7ee08a1a;
+
+  --color-amber: #e0b060; /* person-class observations, selection */
+  --color-amber-dim: #7a5f2e;
+  --color-amber-wash: #e0b0601a;
+
+  --color-olive: #6f7a4e; /* animal-class */
+  --color-olive-wash: #6f7a4e1f;
+
+  --color-sand: #b8ab90; /* vehicle-class */
+  --color-sand-wash: #b8ab901f;
+
+  --color-steel: #7f96a8; /* object-class / neutral data */
+  --color-steel-wash: #7f96a81f;
+
+  --color-alert: #e0736a; /* fault, denied, destructive */
+  --color-alert-wash: #e0736a1f;
+
+  --color-caution: #d9a441; /* degraded, unverified */
+  --color-caution-wash: #d9a44120;
+
+  /* ---- Type families ----------------------------------------------------- */
+  --font-sans:
+    'Inter Tight', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'Roboto Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+
+  /* ---- Radii — industrial, nearly square --------------------------------- */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+
+  /* ---- Motion ------------------------------------------------------------ */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---------------------------------------------------------------------------
+ * Base
+ * ------------------------------------------------------------------------ */
+
+:root {
+  color-scheme: dark;
+  /* Safe-area fallbacks so layout maths never yields NaN on non-notch devices. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  /* Height of the mobile tab bar, consumed by scroll containers for padding. */
+  --nav-height: 56px;
+}
+
+* {
+  border-color: var(--color-hairline);
+}
+
+html {
+  background-color: var(--color-void);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background-color: var(--color-void);
+  color: var(--color-bone);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv05' 1, 'ss01' 1;
+  /* The camera surface must never rubber-band on iOS. */
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numeric alignment for all telemetry. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Focus — always visible, never colour-only
+ * ------------------------------------------------------------------------ */
+
+:focus-visible {
+  outline: 2px solid var(--color-tactical);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* Suppress the outline for pointer interactions only. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Textures — faint contour + grid, layered behind panels
+ * ------------------------------------------------------------------------ */
+
+.fk-grid {
+  background-image:
+    linear-gradient(to right, #ffffff06 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff06 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/*
+ * Topographic wash. Two offset radial gradients approximate contour banding
+ * without shipping a raster asset — cheap to composite and resolution
+ * independent.
+ */
+.fk-contour::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    repeating-radial-gradient(
+      circle at 18% 12%,
+      transparent 0 38px,
+      rgba(126, 224, 138, 0.035) 38px 39px
+    ),
+    repeating-radial-gradient(
+      circle at 82% 88%,
+      transparent 0 46px,
+      rgba(184, 171, 144, 0.03) 46px 47px
+    );
+}
+
+/* ---------------------------------------------------------------------------
+ * Scrollbars — thin, desktop only
+ * ------------------------------------------------------------------------ */
+
+@media (pointer: fine) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-hairline-strong) transparent;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion preferences
+ * ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes fk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.fk-pulse {
+  animation: fk-pulse 2s var(--ease-out-quint) infinite;
+}
+
+@keyframes fk-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.fk-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, #ffffff10, transparent);
+  animation: fk-sweep 1.6s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+ * Utility classes used across screens
+ * ------------------------------------------------------------------------ */
+
+/* Small uppercase technical label. */
+.fk-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-slate);
+}
+
+/* Wordmark spacing: F L O C K R A F T */
+.fk-wordmark {
+  letter-spacing: 0.34em;
+  font-weight: 600;
+}
+
+/* Minimum comfortable touch target per WCAG 2.5.5 / Apple HIG. */
+.fk-tap {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Hide scrollbar on horizontal filter rails while keeping keyboard scroll. */
+.fk-rail {
+  scrollbar-width: none;
+}
+.fk-rail::-webkit-scrollbar {
+  display: none;
+}

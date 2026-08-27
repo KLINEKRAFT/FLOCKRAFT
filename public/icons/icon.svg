@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FLOCKRAFT">
+  <rect width="512" height="512" fill="#07090a"/>
+  <g stroke="#2b343c" stroke-width="1" opacity="0.9">
+    <path d="M0 128h512M0 256h512M0 384h512M128 0v512M256 0v512M384 0v512"/>
+  </g>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#3a454e" stroke-width="2"/>
+  <circle cx="256" cy="256" r="104" fill="none" stroke="#3a454e" stroke-width="1.5" opacity="0.7"/>
+  <g stroke="#7ee08a" stroke-width="10" stroke-linecap="square">
+    <path d="M256 74v58M256 380v58M74 256h58M380 256h58"/>
+  </g>
+  <rect x="256" y="146" width="156" height="156" fill="#7ee08a" fill-opacity="0.14"
+        stroke="#7ee08a" stroke-width="12" transform="rotate(45 256 256)"/>
+  <circle cx="256" cy="256" r="20" fill="#e0b060"/>
+</svg>
