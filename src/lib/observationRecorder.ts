@@ -22,7 +22,10 @@ import { FaceGallery } from '@/lib/vision/faceGallery';
 import {
   embedFace,
   isFaceEmbedderLoaded,
+  pickFaceAttempt,
   FACE_MODEL_ID,
+  INITIAL_FACE_CAPTURE,
+  type FaceCaptureState,
   type FaceEmbedding,
 } from '@/lib/vision/faceEmbedder';
 import { matchFace, FACE_SENSITIVITY } from '@/lib/vision/faceMatcher';
@@ -149,6 +152,12 @@ export class ObservationRecorder {
 
       await this.#promote(track, sources, now);
     }
+
+    // One further look for a face, for whichever open observation most needs
+    // it. Deliberately after the promotion loop and limited to a single
+    // attempt per tick: inference is per-face, and a busy doorway would
+    // otherwise multiply its cost by the size of the crowd.
+    await this.#retryFace(tracks, sources, now);
 
     // Co-visibility is counted once per pair per overlapping observation, not
     // once per tick. Counting per tick would report "observed together 240x"
@@ -424,10 +433,12 @@ export class ObservationRecorder {
     // when a match was proposed above: the proposal is not yet a decision. If
     // the operator confirms it, `confirmMatch` moves the descriptor onto the
     // confirmed subject; if they decline, it correctly belongs to a new one.
+    let faceEmbeddingId: string | undefined;
     if (face) {
       try {
+        faceEmbeddingId = createId('emb');
         await this.#faces.add({
-          id: createId('emb'),
+          id: faceEmbeddingId,
           entityId: entity.id,
           sightingId,
           descriptor: face.descriptor,
@@ -437,6 +448,7 @@ export class ObservationRecorder {
         });
       } catch {
         // Storage pressure must not cost the observation itself.
+        faceEmbeddingId = undefined;
       }
     }
     this.#counts[track.kind] += 1;
@@ -455,6 +467,11 @@ export class ObservationRecorder {
       peakScore: track.peakScore,
       bestScore: track.score,
       pendingBestBlob: null,
+      face: face
+        ? { bestScore: face.score, attempts: 1, lastAttemptAt: now }
+        : { ...INITIAL_FACE_CAPTURE, attempts: 1, lastAttemptAt: now },
+      faceEmbeddingId,
+      pendingFace: null,
       thumbnailId,
       attributes: bound,
       class: track.class,
@@ -513,6 +530,30 @@ export class ObservationRecorder {
 
     await repository.addSighting(sighting);
 
+    // A better face may have arrived after promotion. Supersede once, here,
+    // rather than rewriting storage every time the subject turned toward the
+    // camera — and delete the weaker descriptor rather than leaving two
+    // near-identical vectors from one observation crowding the gallery.
+    if (open.pendingFace) {
+      try {
+        if (open.faceEmbeddingId) {
+          await repository.deleteFaceEmbedding(open.faceEmbeddingId);
+        }
+        await this.#faces.add({
+          id: createId('emb'),
+          entityId: open.entityId,
+          sightingId: open.sightingId,
+          descriptor: open.pendingFace.descriptor,
+          score: open.pendingFace.score,
+          model: FACE_MODEL_ID,
+          createdAt: endedAt,
+        });
+      } catch {
+        // The weaker descriptor, if any, simply stands.
+      }
+      open.pendingFace = null;
+    }
+
     const entity = await repository.getEntity(open.entityId);
     if (!entity) return null;
 
@@ -533,6 +574,48 @@ export class ObservationRecorder {
     this.#candidates.remember(updated, attributes);
 
     return { sighting, entity: updated, isNewEntity: open.isNewEntity };
+  }
+
+  /**
+   * Gives one open observation another chance at a face.
+   *
+   * The embedder previously ran once, at promotion, and never again — so a
+   * subject whose face was not visible in that single instant was never
+   * captured however long they stayed. The better descriptor is held until
+   * close and supersedes the stored one there, mirroring how a better
+   * thumbnail is handled: one replacement per observation rather than a
+   * delete-and-rewrite every time the subject turns their head.
+   */
+  async #retryFace(tracks: Track[], sources: FrameSources, now: number): Promise<void> {
+    const { settings } = this.#context;
+    if (!settings.faceRecognition || !isFaceEmbedderLoaded()) return;
+
+    const byTrack = new Map(tracks.map((track) => [track.id, track]));
+    const candidates: Array<{ key: OpenObservation; state: FaceCaptureState }> = [];
+    for (const open of this.#open.values()) {
+      if (open.kind !== 'person') continue;
+      // Only a track still in frame can be looked at again.
+      if (!byTrack.has(open.trackId)) continue;
+      candidates.push({ key: open, state: open.face });
+    }
+
+    const target = pickFaceAttempt(candidates, now);
+    if (!target) return;
+
+    const track = byTrack.get(target.trackId);
+    if (!track) return;
+
+    target.face = {
+      ...target.face,
+      attempts: target.face.attempts + 1,
+      lastAttemptAt: now,
+    };
+
+    const found = await this.#embed(track, sources);
+    if (!found || found.score <= target.face.bestScore) return;
+
+    target.face = { ...target.face, bestScore: found.score };
+    target.pendingFace = found;
   }
 
   /**
@@ -624,6 +707,11 @@ interface OpenObservation {
   bestScore: number;
   /** Already-encoded better frame, awaiting the observation's close. */
   pendingBestBlob: EncodedThumbnail | null;
+  /** How the search for a usable face is going. See `faceEmbedder`. */
+  face: FaceCaptureState;
+  /** Descriptor stored so far, and the better one waiting to supersede it. */
+  faceEmbeddingId?: string;
+  pendingFace: FaceEmbedding | null;
   /** Thumbnail stored so far; replaced only if a better frame arrives. */
   thumbnailId?: MediaId;
   attributes: Attribute[];
