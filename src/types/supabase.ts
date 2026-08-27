@@ -95,6 +95,7 @@ export type Database = {
           label: string;
           last_seen_at: string;
           merged_from_ids: string[];
+          profile: Json;
           sighting_count: number;
           summary: string | null;
           thumbnail_id: string | null;
@@ -112,6 +113,7 @@ export type Database = {
           label: string;
           last_seen_at: string;
           merged_from_ids?: string[];
+          profile?: Json;
           sighting_count?: number;
           summary?: string | null;
           thumbnail_id?: string | null;
@@ -129,6 +131,7 @@ export type Database = {
           label?: string;
           last_seen_at?: string;
           merged_from_ids?: string[];
+          profile?: Json;
           sighting_count?: number;
           summary?: string | null;
           thumbnail_id?: string | null;

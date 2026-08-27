@@ -1,0 +1,50 @@
+name: CI
+
+# Vercel already builds every push, which catches typecheck and build failures.
+# What it does not run is lint, and it does not gate the pull request. This
+# workflow is the check that has to pass before merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push makes an in-flight run irrelevant; cancelling frees the runner
+# rather than spending it on a commit nobody will merge.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck · Lint · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Node major Vercel builds with, so a version-specific
+          # failure surfaces here rather than only in a deployment.
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          # Absent Supabase configuration is a supported state — the app runs
+          # local-only. Building without it proves that path stays intact.
+          NEXT_TELEMETRY_DISABLED: '1'

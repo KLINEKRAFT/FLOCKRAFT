@@ -67,6 +67,7 @@ src/
   lib/
     vision/             detectors, tracker, attributes, entity matcher
     store/              repository interface, IndexedDB, sync outbox
+    profiles.ts         entity profile field definitions
     sync/               sync engine and domain↔row mappers
   types/                domain model + generated database types
 supabase/migrations/    Postgres schema with row-level security
@@ -127,6 +128,36 @@ default). Without that, every momentary false positive would mint a permanent
 entity. The sighting is written to storage *at promotion* and updated on close,
 so an interrupted session — tab closed, page reclaimed, battery dead — still
 leaves a coherent record.
+
+### Entity profiles
+
+Structured, mostly operator-recorded fields — vehicle make / model / approximate
+year / body type / licence plate / tag state, person gender / approximate age /
+approximate height / description, plus animal and object sets.
+
+These are **recorded, not inferred**, and that is a deliberate design decision
+rather than a missing feature. A single uncalibrated camera cannot determine
+most of them:
+
+| Field | Why it isn't automatic |
+| --- | --- |
+| Height | Needs a ground plane and known camera geometry. Pixel height is a function of distance, not stature. |
+| Make / model / year | Needs a fine-grained classifier over hundreds of vehicle classes. COCO reports `car` / `truck` / `bus` and nothing finer. |
+| Licence plate | Needs plate localisation plus OCR at a resolution a wide-angle phone camera rarely delivers. |
+| Gender | Not visually determinable. A classifier would predict perceived presentation from its training distribution and be confidently wrong about real people. |
+
+What *is* filled automatically is only what is genuinely measured: colour
+sampled from the frame, and the two body types COCO reports as distinct classes
+(motorcycle, bus). A sedan-versus-SUV guess from box aspect ratio would be close
+to noise, so it isn't made.
+
+Every field carries provenance — `source: 'model' | 'user'` with a confidence —
+so the interface shows a sampled colour and an operator's plate reading
+differently. Field definitions live in one place, `lib/profiles.ts`, and drive
+storage, the editor, display and search; adding a field is one line there.
+
+Profile values are part of the local search surface, so searching a plate or a
+make finds the entity.
 
 ### Storage and sync
 
@@ -285,6 +316,11 @@ with filters and activity graph, canvas map, privacy controls, PWA.
 
 Cross-device sync — Postgres schema with RLS, magic-link auth, an offline
 outbox, and a bidirectional sync engine with lazy media fetch.
+
+Entity profiles — operator-recorded vehicle and person fields with provenance,
+searchable, synced.
+
+CI — typecheck, lint and build on every pull request.
 
 **Next**
 

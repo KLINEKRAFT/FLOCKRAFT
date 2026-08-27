@@ -6,6 +6,7 @@ import type { Entity } from '@/types/domain';
 import { EntityLabel } from '@/components/ui/EntityLabel';
 import { Thumbnail } from '@/components/ui/Thumbnail';
 import { formatRelative } from '@/lib/format';
+import { profileSummary } from '@/lib/profiles';
 import { cn } from '@/lib/cn';
 
 /**
@@ -33,6 +34,8 @@ export function EntityCard({
   className,
   now,
 }: EntityCardProps) {
+  const descriptor = profileSummary(entity) ?? entity.summary;
+
   const body = (
     <>
       <Thumbnail
@@ -46,8 +49,10 @@ export function EntityCard({
         <p className="tabular mt-1.5 font-mono text-[10px] text-ash">
           {entity.sightingCount} {entity.sightingCount === 1 ? 'SIGHTING' : 'SIGHTINGS'}
         </p>
+        {/* A recorded plate or make/model tells an operator far more at a
+            glance than a sampled colour, so it wins the one line available. */}
         <p className="mt-1 truncate text-[11px] text-slate">
-          {entity.summary ? `${entity.summary} · ` : ''}
+          {descriptor ? `${descriptor} · ` : ''}
           Last seen {formatRelative(entity.lastSeenAt, now)}
         </p>
       </div>
