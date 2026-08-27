@@ -3,6 +3,7 @@ import type {
   Attribute,
   Entity,
   EntityProfile,
+  FaceEmbeddingRecord,
   GeoFix,
   MediaRecord,
   NormalizedBox,
@@ -339,3 +340,79 @@ function rowToGeo(
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+/* -------------------------------------------------------------------------- */
+/* Face descriptors                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Descriptors travel as base64 of the raw little-endian Float32Array, not as a
+ * JSON number array.
+ *
+ * Exactness is the first reason: a float32 written as a decimal and parsed back
+ * is only identical if the serialiser emitted enough digits, and a descriptor
+ * that shifts in the last bits on every round trip is a descriptor whose
+ * similarity scores drift for no observable reason.
+ *
+ * Size is the second: 1024 floats are 5.4 KB base64 against roughly 12 KB as
+ * JSON. Over a gallery of a few thousand that is the difference between an
+ * 11 MB and a 24 MB sync onto a phone.
+ *
+ * Both directions are little-endian explicitly rather than relying on the
+ * platform default, so a big-endian client could never read another device's
+ * descriptors as noise.
+ */
+export function encodeDescriptor(descriptor: Float32Array): string {
+  const view = new DataView(new ArrayBuffer(descriptor.length * 4));
+  for (let i = 0; i < descriptor.length; i += 1) {
+    view.setFloat32(i * 4, descriptor[i] ?? 0, true);
+  }
+  const bytes = new Uint8Array(view.buffer);
+  let binary = '';
+  // Chunked: spreading a 4 KB array into String.fromCharCode is fine, but this
+  // stays safe if the descriptor length ever grows.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+export function decodeDescriptor(encoded: string): Float32Array {
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
+  const out = new Float32Array(bytes.length / 4);
+  for (let i = 0; i < out.length; i += 1) out[i] = view.getFloat32(i * 4, true);
+  return out;
+}
+
+export function faceEmbeddingToRow(
+  record: FaceEmbeddingRecord,
+  userId: string,
+): TablesInsert<'face_embeddings'> {
+  return {
+    id: record.id,
+    user_id: userId,
+    entity_id: record.entityId,
+    sighting_id: record.sightingId ?? null,
+    descriptor: encodeDescriptor(record.descriptor),
+    dimensions: record.descriptor.length,
+    model: record.model,
+    score: record.score,
+    created_at: toIso(record.createdAt),
+  };
+}
+
+export function rowToFaceEmbedding(row: Tables<'face_embeddings'>): FaceEmbeddingRecord {
+  return {
+    id: row.id,
+    entityId: row.entity_id,
+    sightingId: row.sighting_id ?? undefined,
+    descriptor: decodeDescriptor(row.descriptor),
+    score: row.score,
+    model: row.model,
+    createdAt: toMs(row.created_at),
+  };
+}

@@ -45,7 +45,7 @@ const OPTIONS: Array<{
     format: 'json',
     label: 'Full backup',
     description:
-      'Every record, losslessly, including provenance and co-visibility. Machine-readable rather than legible.',
+      'Every record, losslessly, including provenance, co-visibility and any stored face signatures. Machine-readable rather than legible.',
     icon: <FileJson aria-hidden className="size-3.5" />,
   },
 ];
@@ -108,7 +108,8 @@ export function ExportPanel() {
         <Download aria-hidden className="mt-0.5 size-3 shrink-0 text-slate" />
         <p className="text-[11px] leading-relaxed text-slate">
           Exports are generated on this device and never uploaded. Stored images are not included
-          in any format — a full backup restores records, not thumbnails.
+          in any format — a full backup restores records, not thumbnails. The JSON backup does
+          include face signatures when you have any, so treat that file as biometric data.
         </p>
       </div>
 

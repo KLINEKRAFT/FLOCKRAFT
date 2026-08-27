@@ -1,3 +1,4 @@
+import { FACE_STRONG_SIMILARITY } from './faceMatcher';
 import type {
   Attribute,
   Entity,
@@ -124,16 +125,26 @@ export function recencyScore(lastSeenAt: number, now: number): number {
   return 1 - Math.log10(elapsedMinutes / 5 + 1) / Math.log10(1440 / 5 + 1);
 }
 
-/** Copy for the confirmation prompt — hedged by design. */
+/**
+ * Copy for the confirmation prompt — hedged by design.
+ *
+ * A face proposal and a colour proposal are not on the same scale: a 0.75
+ * cosine between face descriptors is strong evidence, while 0.75 from colour
+ * agreement and recency is barely worth showing. Each is therefore read against
+ * its own threshold rather than against a single shared number that would
+ * flatter one and undersell the other.
+ */
 export function describeProposal(candidate: EntityMatchCandidate): string {
-  return candidate.similarity >= STRONG_PROPOSAL_SIMILARITY
-    ? `Likely ${candidate.entityLabel}`
-    : `Possible ${candidate.entityLabel}`;
+  const strong = candidate.basis.includes('face')
+    ? candidate.similarity >= FACE_STRONG_SIMILARITY
+    : candidate.similarity >= STRONG_PROPOSAL_SIMILARITY;
+  return strong ? `Likely ${candidate.entityLabel}` : `Possible ${candidate.entityLabel}`;
 }
 
 export const BASIS_LABEL: Record<MatchBasis, string> = {
   class: 'Same class',
   appearance: 'Appearance agreement',
+  face: 'Face match',
   'temporal-proximity': 'Seen recently',
   'spatial-proximity': 'Same location',
   'user-confirmed': 'Previously confirmed',

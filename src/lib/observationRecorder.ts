@@ -18,6 +18,14 @@ import { cropThumbnail } from '@/lib/vision/capture';
 import { analyzeAppearance } from '@/lib/vision/attributes';
 import { proposeMatch } from '@/lib/vision/entityMatcher';
 import { CandidatePool } from '@/lib/vision/candidatePool';
+import { FaceGallery } from '@/lib/vision/faceGallery';
+import {
+  embedFace,
+  isFaceEmbedderLoaded,
+  FACE_MODEL_ID,
+  type FaceEmbedding,
+} from '@/lib/vision/faceEmbedder';
+import { matchFace, FACE_SENSITIVITY } from '@/lib/vision/faceMatcher';
 import type { ObservationRepository } from '@/lib/store';
 import type { FlockraftSettings } from '@/lib/settings';
 
@@ -79,10 +87,13 @@ export class ObservationRecorder {
   #recordedPairs = new Set<string>();
   /** Tracks whose proposal the operator rejected; never re-proposed. */
   #rejectedTracks = new Set<string>();
+  /** Stored face descriptors, when face recognition is enabled. */
+  #faces: FaceGallery;
 
   constructor(context: RecorderContext) {
     this.#context = context;
     this.#candidates = new CandidatePool(context.repository);
+    this.#faces = new FaceGallery(context.repository);
   }
 
   get counts(): SessionCounts {
@@ -129,9 +140,10 @@ export class ObservationRecorder {
       }
 
       if (dwell < settings.observationThresholdMs) {
-        // Warm the candidate pool while the track is still earning its dwell,
-        // so promotion does not have to wait on storage.
+        // Warm the caches while the track is still earning its dwell, so
+        // promotion does not have to wait on storage.
         if (settings.autoEntityMatching) this.#candidates.prefetch(track.kind, now);
+        if (settings.faceRecognition && track.kind === 'person') this.#faces.prefetch(now);
         continue;
       }
 
@@ -221,7 +233,19 @@ export class ObservationRecorder {
       media: false,
       notes: true,
       associations: true,
+      // Descriptors captured against the provisional record are re-pointed at
+      // the confirmed entity below, so they must not be cascaded away here.
+      faceEmbeddings: false,
     });
+
+    // Descriptors captured against the provisional record are genuine readings
+    // of the confirmed subject, so they join that subject's gallery. This is
+    // what makes each confirmation improve later recognition.
+    try {
+      await this.#faces.reassign(provisionalId, targetEntityId);
+    } catch {
+      // A failure here loses a descriptor, not the confirmation itself.
+    }
 
     open.entityId = targetEntityId;
     open.isNewEntity = false;
@@ -271,14 +295,49 @@ export class ObservationRecorder {
           })
         : [];
 
+    // An entity currently held open by another track is, by definition, a
+    // different subject: both are in frame at once. Proposing one as a match
+    // for the other would be wrong no matter how similar they look.
+    const openEntityIds = new Set([...this.#open.values()].map((o) => o.entityId));
+
+    // A face descriptor, when the operator has enabled it. Computed once per
+    // observation on the frame that qualified the track, like appearance.
+    const face = await this.#embed(track, sources);
+
     // Propose — never assume — an identity match.
     let candidate = track.candidateMatch;
-    if (settings.autoEntityMatching && !candidate && !this.#rejectedTracks.has(track.id)) {
+    const mayPropose = !candidate && !this.#rejectedTracks.has(track.id);
+
+    /*
+     * Face first, and exclusively when it is available.
+     *
+     * A face descriptor and a colour reading are not two opinions to be
+     * averaged. The face signal is enormously stronger, so blending in a
+     * colour score could only drag a good proposal down or lift a bad one up.
+     * When there is a usable face, it decides; when there is not, the weak
+     * signals are all that is left and are used on their own.
+     */
+    if (mayPropose && face) {
+      const gallery = await this.#faces.all(now);
+      const hit = matchFace(face.descriptor, gallery, {
+        exclude: openEntityIds,
+        threshold: FACE_SENSITIVITY[settings.faceSensitivity],
+      });
+      if (hit) {
+        const matched = await repository.getEntity(hit.entityId);
+        if (matched && !matched.archivedAt) {
+          candidate = {
+            entityId: matched.id,
+            entityLabel: matched.label,
+            similarity: hit.similarity,
+            basis: ['face'],
+          };
+        }
+      }
+    }
+
+    if (mayPropose && !candidate && settings.autoEntityMatching) {
       const pool = await this.#candidates.candidates(track.kind, now);
-      // An entity currently held open by another track is, by definition, a
-      // different subject: both are in frame at once. Proposing one as a match
-      // for the other would be wrong no matter how similar they look.
-      const openEntityIds = new Set([...this.#open.values()].map((o) => o.entityId));
       const proposal = proposeMatch(track, {
         entities: pool.entities.filter((entity) => !openEntityIds.has(entity.id)),
         attributesByEntity: pool.attributesByEntity,
@@ -360,6 +419,26 @@ export class ObservationRecorder {
     // Matchable immediately, so a subject who steps out of frame and returns
     // within the pool's refresh window is still a candidate.
     this.#candidates.remember(entity, bound);
+
+    // The descriptor is written against the entity that was just created, even
+    // when a match was proposed above: the proposal is not yet a decision. If
+    // the operator confirms it, `confirmMatch` moves the descriptor onto the
+    // confirmed subject; if they decline, it correctly belongs to a new one.
+    if (face) {
+      try {
+        await this.#faces.add({
+          id: createId('emb'),
+          entityId: entity.id,
+          sightingId,
+          descriptor: face.descriptor,
+          score: face.score,
+          model: FACE_MODEL_ID,
+          createdAt: now,
+        });
+      } catch {
+        // Storage pressure must not cost the observation itself.
+      }
+    }
     this.#counts[track.kind] += 1;
     this.#counts.newEntities += 1;
 
@@ -454,6 +533,32 @@ export class ObservationRecorder {
     this.#candidates.remember(updated, attributes);
 
     return { sighting, entity: updated, isNewEntity: open.isNewEntity };
+  }
+
+  /**
+   * Computes a face descriptor for a person track, or null.
+   *
+   * Null covers every case where a descriptor would be untrustworthy — the
+   * feature is off, the models are not resident, the subject is not a person,
+   * no face was found, or the face was too small. A null is "no face signal",
+   * never "no match", and the caller falls back to the weaker signals.
+   */
+  async #embed(track: Track, sources: FrameSources): Promise<FaceEmbedding | null> {
+    const { settings } = this.#context;
+    if (!settings.faceRecognition || track.kind !== 'person') return null;
+    if (!isFaceEmbedderLoaded()) return null;
+
+    // The full-resolution video, not the downscaled inference canvas: a face
+    // inside a person box on a 480 px canvas is often only tens of pixels
+    // across, which is below the threshold the embedder will accept anyway.
+    const source = sources.video ?? sources.inference;
+    if (!source) return null;
+
+    try {
+      return await embedFace(source, track.box);
+    } catch {
+      return null;
+    }
   }
 
   /**

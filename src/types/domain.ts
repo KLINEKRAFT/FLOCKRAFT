@@ -132,6 +132,7 @@ export interface EntityMatchCandidate {
 export type MatchBasis =
   | 'class'
   | 'appearance'
+  | 'face'
   | 'temporal-proximity'
   | 'spatial-proximity'
   | 'user-confirmed';
@@ -204,6 +205,29 @@ export interface Sighting {
   attributes: Attribute[];
   /** Entity ids co-visible during this sighting. */
   coVisibleEntityIds: EntityId[];
+}
+
+/**
+ * A stored face descriptor.
+ *
+ * This is a biometric identifier, and the type is deliberately separate from
+ * `Attribute` — which holds things a subject *was wearing on a day* — because
+ * the two carry completely different obligations. An attribute is a
+ * time-stamped observation; this is a template that identifies a person across
+ * time, and it lives under its own setting, its own storage counter and its own
+ * delete control.
+ */
+export interface FaceEmbeddingRecord {
+  id: string;
+  entityId: EntityId;
+  sightingId?: SightingId;
+  /** L2-normalised, 1024 dimensions. See `lib/vision/faceEmbedder.ts`. */
+  descriptor: Float32Array;
+  /** Detector confidence for the face this came from. */
+  score: number;
+  /** Identifies the producing model, so incomparable vectors can be retired. */
+  model: string;
+  createdAt: number;
 }
 
 export interface Note {

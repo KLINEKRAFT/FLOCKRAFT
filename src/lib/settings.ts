@@ -1,5 +1,6 @@
 import type { DetectionClass } from '@/types/domain';
 import { DEFAULT_ENABLED_CLASSES } from '@/lib/taxonomy';
+import { FACE_SENSITIVITY, type FaceSensitivity } from '@/lib/vision/faceMatcher';
 
 /**
  * PRIVACY & CAPTURE SETTINGS
@@ -34,6 +35,24 @@ export interface FlockraftSettings {
    * explicit user confirmation.
    */
   autoEntityMatching: boolean;
+  /**
+   * Compute and store a face descriptor for every observed person.
+   *
+   * This is the one setting in FLOCKRAFT that creates a biometric identifier.
+   * It is off by default and stays off until deliberately enabled, and turning
+   * it off stops new descriptors being written — it does not delete the ones
+   * already stored, which is a separate, explicit action on the privacy screen.
+   */
+  faceRecognition: boolean;
+  /**
+   * How close a face must be before a match is proposed.
+   *
+   * A setting rather than a constant because the right operating point cannot
+   * be established without real faces — see the calibration note in
+   * `lib/vision/faceMatcher.ts`. The operator has the faces; this is the lever
+   * they need when the default proposes too much or too little.
+   */
+  faceSensitivity: FaceSensitivity;
 
   /** Target detector invocations per second. The preview stays at display rate. */
   detectionFps: number;
@@ -62,6 +81,8 @@ export const DEFAULT_SETTINGS: FlockraftSettings = {
   saveLocation: false,
   faceAnalysis: false,
   autoEntityMatching: false,
+  faceRecognition: false,
+  faceSensitivity: 'balanced',
 
   detectionFps: 8,
   confidenceThreshold: 0.55,
@@ -110,6 +131,8 @@ function sanitize(settings: FlockraftSettings): FlockraftSettings {
     // Snap to the offered sizes: an arbitrary value from an older build or a
     // hand-edited store would silently change storage cost per observation.
     thumbnailSize: THUMBNAIL_SIZES.includes(settings.thumbnailSize) ? settings.thumbnailSize : 320,
+    faceSensitivity:
+      settings.faceSensitivity in FACE_SENSITIVITY ? settings.faceSensitivity : 'balanced',
     enabledClasses: settings.enabledClasses?.length
       ? settings.enabledClasses
       : DEFAULT_ENABLED_CLASSES,

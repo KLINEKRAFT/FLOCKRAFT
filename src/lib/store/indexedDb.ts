@@ -5,6 +5,7 @@ import type {
   Entity,
   EntityId,
   EntityKind,
+  FaceEmbeddingRecord,
   MediaId,
   MediaRecord,
   Note,
@@ -55,6 +56,12 @@ interface FlockraftDb extends DBSchema {
   notes: { key: string; value: Note; indexes: { entityId: EntityId } };
   associations: { key: string; value: Association; indexes: { entityId: EntityId } };
   media: { key: MediaId; value: MediaRecord; indexes: { entityId: EntityId } };
+  /** Face descriptors. Separate store so a purge can target them alone. */
+  faceEmbeddings: {
+    key: string;
+    value: FaceEmbeddingRecord;
+    indexes: { entityId: EntityId; createdAt: number };
+  };
   counters: { key: string; value: { key: string; value: number } };
   /** Pending sync intents. See `store/outbox.ts`. */
   outbox: { key: string; value: OutboxEntry; indexes: { queuedAt: number } };
@@ -64,10 +71,11 @@ interface FlockraftDb extends DBSchema {
 
 const DB_NAME = 'flockraft';
 /**
- * v2 adds the sync outbox and cursor stores. The upgrade is purely additive —
- * an existing local database keeps every observation it already holds.
+ * v2 adds the sync outbox and cursor stores; v3 adds face descriptors. Both
+ * upgrades are purely additive — an existing local database keeps every
+ * observation it already holds.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export class IndexedDbRepository implements ObservationRepository {
   readonly id = 'indexeddb';
@@ -85,6 +93,7 @@ export class IndexedDbRepository implements ObservationRepository {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) createV1Stores(db);
         if (oldVersion < 2) createV2Stores(db);
+        if (oldVersion < 3) createV3Stores(db);
       },
     });
     return this.#db;
@@ -276,6 +285,11 @@ export class IndexedDbRepository implements ObservationRepository {
         await db.delete('notes', note.id);
       }
     }
+    if (cascade.faceEmbeddings) {
+      for (const embedding of await db.getAllFromIndex('faceEmbeddings', 'entityId', id)) {
+        await db.delete('faceEmbeddings', embedding.id);
+      }
+    }
     if (cascade.associations) {
       for (const association of await db.getAll('associations')) {
         if (association.entityId === id || association.otherEntityId === id) {
@@ -433,6 +447,39 @@ export class IndexedDbRepository implements ObservationRepository {
     return associations.sort((a, b) => b.count - a.count);
   }
 
+  /* ---- Face descriptors -------------------------------------------------- */
+
+  async putFaceEmbedding(record: FaceEmbeddingRecord): Promise<void> {
+    const db = await this.#open();
+    await db.put('faceEmbeddings', record);
+  }
+
+  /** Local-only helper used by the sync engine to build a row. */
+  async getFaceEmbedding(id: string): Promise<FaceEmbeddingRecord | null> {
+    const db = await this.#open();
+    return (await db.get('faceEmbeddings', id)) ?? null;
+  }
+
+  async listFaceEmbeddings(): Promise<FaceEmbeddingRecord[]> {
+    const db = await this.#open();
+    return db.getAll('faceEmbeddings');
+  }
+
+  async listFaceEmbeddingsFor(entityId: EntityId): Promise<FaceEmbeddingRecord[]> {
+    const db = await this.#open();
+    return db.getAllFromIndex('faceEmbeddings', 'entityId', entityId);
+  }
+
+  async deleteFaceEmbedding(id: string): Promise<void> {
+    const db = await this.#open();
+    await db.delete('faceEmbeddings', id);
+  }
+
+  async purgeFaceEmbeddings(): Promise<void> {
+    const db = await this.#open();
+    await db.clear('faceEmbeddings');
+  }
+
   /* ---- Media ------------------------------------------------------------ */
 
   async putMedia(record: MediaRecord): Promise<void> {
@@ -539,6 +586,7 @@ export class IndexedDbRepository implements ObservationRepository {
       mediaBytes,
       notes: await db.count('notes'),
       sessions: await db.count('sessions'),
+      faceEmbeddings: await db.count('faceEmbeddings'),
       quotaBytes,
       usageBytes,
     };
@@ -554,6 +602,7 @@ export class IndexedDbRepository implements ObservationRepository {
       'notes',
       'associations',
       'media',
+      'faceEmbeddings',
       'counters',
       'outbox',
       'syncState',
@@ -606,6 +655,12 @@ function createV2Stores(db: IDBPDatabase<FlockraftDb>): void {
   const outbox = db.createObjectStore('outbox', { keyPath: 'id' });
   outbox.createIndex('queuedAt', 'queuedAt');
   db.createObjectStore('syncState', { keyPath: 'key' });
+}
+
+function createV3Stores(db: IDBPDatabase<FlockraftDb>): void {
+  const embeddings = db.createObjectStore('faceEmbeddings', { keyPath: 'id' });
+  embeddings.createIndex('entityId', 'entityId');
+  embeddings.createIndex('createdAt', 'createdAt');
 }
 
 const associationKey = (a: EntityId, b: EntityId) => `${a}::${b}`;

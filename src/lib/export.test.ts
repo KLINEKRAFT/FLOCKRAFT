@@ -8,6 +8,7 @@ import {
   toJson,
   type ExportBundle,
 } from '@/lib/export';
+import { encodeDescriptor } from '@/lib/sync/mappers';
 
 /** Fixed instant so timestamp columns are assertable. */
 const T = new Date(2026, 3, 20, 14, 32, 5).getTime();
@@ -54,6 +55,7 @@ function bundle(overrides: Partial<ExportBundle> = {}): ExportBundle {
     sightings: [sighting()],
     notes: [],
     associations: [],
+    faceEmbeddings: [],
     ...overrides,
   };
 }
@@ -250,6 +252,57 @@ describe('toJson', () => {
       entities: Entity[];
     };
     expect(parsed.entities[0]?.profile?.plate).toEqual(source.profile?.plate);
+  });
+});
+
+describe('face signatures in exports', () => {
+  const embedding = {
+    id: 'emb_1',
+    entityId: 'ent_1',
+    descriptor: Float32Array.from({ length: 8 }, (_, i) => i / 8),
+    score: 0.93,
+    model: 'human/faceres-1024',
+    createdAt: T,
+  };
+
+  it('declares whether the backup carries biometric data', () => {
+    const without = JSON.parse(toJson(bundle())) as Record<string, unknown>;
+    expect(without.includesFaceEmbeddings).toBe(false);
+
+    const withFaces = JSON.parse(toJson(bundle({ faceEmbeddings: [embedding] }))) as {
+      includesFaceEmbeddings: boolean;
+      counts: { faceEmbeddings: number };
+    };
+    expect(withFaces.includesFaceEmbeddings).toBe(true);
+    expect(withFaces.counts.faceEmbeddings).toBe(1);
+  });
+
+  it('encodes the descriptor rather than emitting a raw typed array', () => {
+    // JSON.stringify turns a Float32Array into {"0":..,"1":..}, which is both
+    // enormous and lossy to read back. Base64 is the same encoding sync uses.
+    const parsed = JSON.parse(toJson(bundle({ faceEmbeddings: [embedding] }))) as {
+      faceEmbeddings: Array<{ descriptor: string; dimensions: number }>;
+    };
+    expect(typeof parsed.faceEmbeddings[0]?.descriptor).toBe('string');
+    expect(parsed.faceEmbeddings[0]?.dimensions).toBe(8);
+  });
+
+  it('reports a per-entity count in the CSV without dumping the vector', () => {
+    const csv = entitiesCsv(bundle({ faceEmbeddings: [embedding, { ...embedding, id: 'emb_2' }] }));
+    const [header, row] = rows(csv);
+    const columns = header!.split(',');
+    expect(columns).toContain('face_signatures');
+    expect(row!.split(',')[columns.indexOf('face_signatures')]).toBe('2');
+    // The vector itself has no business in a spreadsheet. Note that a column
+    // literally named `descriptor` does belong there — it is the object-kind
+    // profile field ("Black backpack"), unrelated to face data.
+    expect(csv).not.toContain(encodeDescriptor(embedding.descriptor));
+  });
+
+  it('keeps signatures out of the sightings sheet entirely', () => {
+    const csv = sightingsCsv(bundle({ faceEmbeddings: [embedding] }));
+    expect(csv).not.toContain(encodeDescriptor(embedding.descriptor));
+    expect(csv).not.toContain('face_signatures');
   });
 });
 

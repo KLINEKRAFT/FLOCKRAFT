@@ -10,6 +10,7 @@ import { ObservationRecorder, type RecordedObservation } from '@/lib/observation
 import { getRepository } from '@/lib/store';
 import { createId } from '@/lib/id';
 import { DetectorLoadError } from '@/lib/vision/detector';
+import { loadFaceEmbedder } from '@/lib/vision/faceEmbedder';
 
 /**
  * DETECTION PIPELINE
@@ -173,6 +174,21 @@ export function useDetectionPipeline({
 
     const repository = getRepository();
     const newSessionId = createId('ses');
+
+    /*
+     * Face models load alongside the detector but do not gate it.
+     *
+     * They are ~7.4 MB, and a failure to fetch them must not stop the camera
+     * from working — the pipeline simply records without face descriptors, and
+     * `#embed` returns null until they are resident. Detection is the product;
+     * recognition is an enhancement to it.
+     */
+    if (settingsRef.current.faceRecognition) {
+      void loadFaceEmbedder().catch(() => {
+        // Surfaced through the absence of face proposals rather than an alert:
+        // there is nothing the operator can usefully do mid-session.
+      });
+    }
 
     const recorder = new ObservationRecorder({
       repository,

@@ -3,12 +3,14 @@ import type {
   Attribute,
   Entity,
   EntityKind,
+  FaceEmbeddingRecord,
   Note,
   Session,
   Sighting,
 } from '@/types/domain';
 import type { ObservationRepository } from '@/lib/store';
 import { profileFieldsFor } from '@/lib/profiles';
+import { encodeDescriptor } from '@/lib/sync/mappers';
 
 /**
  * EXPORT
@@ -32,9 +34,19 @@ import { profileFieldsFor } from '@/lib/profiles';
  * format; sightings carry their `thumbnailId` so a future archive export can
  * reunite them. Anywhere this is offered must say so plainly rather than
  * letting an operator believe a backup is complete when it is not.
+ *
+ * Face descriptors ARE included, in the JSON export only. Two reasons, and the
+ * first is simply honesty: a file offered as a lossless backup that silently
+ * dropped them would not be one. The second is that the argument for export at
+ * all — data the operator cannot extract is data they do not really control —
+ * applies with more force to biometric data, not less. They are omitted from
+ * the CSVs, where a 1024-element vector is noise in a spreadsheet.
+ *
+ * A JSON export therefore contains biometric templates, and the interface
+ * offering it says so.
  */
 
-export const EXPORT_FORMAT_VERSION = 2;
+export const EXPORT_FORMAT_VERSION = 3;
 
 export interface ExportBundle {
   exportedAt: number;
@@ -43,6 +55,7 @@ export interface ExportBundle {
   sightings: Sighting[];
   notes: Note[];
   associations: Association[];
+  faceEmbeddings: FaceEmbeddingRecord[];
 }
 
 /**
@@ -77,6 +90,7 @@ export async function collectExport(repository: ObservationRepository): Promise<
     sightings,
     notes,
     associations,
+    faceEmbeddings: await repository.listFaceEmbeddings(),
   };
 }
 
@@ -95,18 +109,34 @@ export function toJson(bundle: ExportBundle): string {
       // Stated rather than implied: a restore built from this file will have
       // entities and sightings whose `thumbnailId` resolves to nothing.
       includesImages: false,
+      // Equally explicit, for the opposite reason: this file may carry
+      // biometric templates, and anyone handling it should know that.
+      includesFaceEmbeddings: bundle.faceEmbeddings.length > 0,
       counts: {
         sessions: bundle.sessions.length,
         entities: bundle.entities.length,
         sightings: bundle.sightings.length,
         notes: bundle.notes.length,
         associations: bundle.associations.length,
+        faceEmbeddings: bundle.faceEmbeddings.length,
       },
       sessions: bundle.sessions,
       entities: bundle.entities,
       sightings: bundle.sightings,
       notes: bundle.notes,
       associations: bundle.associations,
+      // Base64 of the raw Float32Array, the same encoding sync uses, so a
+      // descriptor survives the round trip bit for bit.
+      faceEmbeddings: bundle.faceEmbeddings.map((record) => ({
+        id: record.id,
+        entityId: record.entityId,
+        sightingId: record.sightingId ?? null,
+        descriptor: encodeDescriptor(record.descriptor),
+        dimensions: record.descriptor.length,
+        model: record.model,
+        score: record.score,
+        createdAt: record.createdAt,
+      })),
     },
     null,
     2,
@@ -151,6 +181,7 @@ export function entitiesCsv(bundle: ExportBundle): string {
     'favorite',
     'summary',
     'notes',
+    'face_signatures',
     ...profileKeys,
     // Provenance in one column rather than doubling the width of the sheet.
     // Which fields a camera guessed at and which an operator typed is the
@@ -159,6 +190,7 @@ export function entitiesCsv(bundle: ExportBundle): string {
   ];
 
   const notesByEntity = groupBy(bundle.notes, (note) => note.entityId);
+  const facesByEntity = groupBy(bundle.faceEmbeddings, (record) => record.entityId);
 
   const rows = bundle.entities.map((entity) => {
     const profile = entity.profile ?? {};
@@ -177,6 +209,7 @@ export function entitiesCsv(bundle: ExportBundle): string {
       entity.favorite,
       entity.summary ?? '',
       (notesByEntity.get(entity.id) ?? []).map((note) => note.body).join(' | '),
+      (facesByEntity.get(entity.id) ?? []).length,
       ...profileKeys.map((key) => profile[key]?.value ?? ''),
       inferred.join(' '),
     ];

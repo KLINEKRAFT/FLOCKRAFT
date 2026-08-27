@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AlertTriangle, Eye, HardDrive, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Eye, HardDrive, ScanFace, ShieldCheck } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { Panel, Divider, SectionLabel } from '@/components/ui/Panel';
-import { Toggle } from '@/components/ui/Controls';
+import { SegmentedControl, Toggle } from '@/components/ui/Controls';
 import { Button } from '@/components/ui/Button';
 import { Sheet } from '@/components/ui/Sheet';
 import { StatusBadge } from '@/components/ui/StatusBadge';
@@ -16,6 +16,12 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import { SyncPanel } from './SyncPanel';
 import { ExportPanel } from './ExportPanel';
 import { formatBytes } from '@/lib/format';
+import {
+  FACE_SENSITIVITY,
+  FACE_SENSITIVITY_HINT,
+  FACE_SENSITIVITY_LABEL,
+  type FaceSensitivity,
+} from '@/lib/vision/faceMatcher';
 
 /**
  * PRIVACY & STORAGE
@@ -31,6 +37,7 @@ import { formatBytes } from '@/lib/format';
 export function SettingsScreen() {
   const { settings, update, reset } = useSettings();
   const [purgeOpen, setPurgeOpen] = useState(false);
+  const [facePurgeOpen, setFacePurgeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const usageQuery = useCallback(() => getRepository().usage(), []);
@@ -41,6 +48,17 @@ export function SettingsScreen() {
     try {
       await getRepository().purgeAll();
       setPurgeOpen(false);
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  const purgeFaces = useCallback(async () => {
+    setBusy(true);
+    try {
+      await getRepository().purgeFaceEmbeddings();
+      setFacePurgeOpen(false);
       refresh();
     } finally {
       setBusy(false);
@@ -133,7 +151,56 @@ export function SettingsScreen() {
             checked={settings.autoEntityMatching}
             onChange={(autoEntityMatching) => update({ autoEntityMatching })}
           />
+          <Divider />
+          <Toggle
+            label="Face recognition"
+            tone="sensitive"
+            description="Store a face signature for every person observed, so returning visitors can be recognised on a later day. A face signature is a biometric identifier. Downloads about 7 MB of models the first time. Matches are still only ever suggested — binding one always requires your confirmation."
+            checked={settings.faceRecognition}
+            disabled={!settings.saveObservations}
+            onChange={(faceRecognition) => update({ faceRecognition })}
+          />
         </Panel>
+
+        {settings.faceRecognition && (
+          <Panel className="mt-2 px-3 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="fk-label">Match strictness</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-ash">
+                  {FACE_SENSITIVITY_HINT[settings.faceSensitivity]}
+                </p>
+              </div>
+              <SegmentedControl<FaceSensitivity>
+                label="Face match strictness"
+                value={settings.faceSensitivity}
+                onChange={(faceSensitivity) => update({ faceSensitivity })}
+                options={(Object.keys(FACE_SENSITIVITY) as FaceSensitivity[]).map((level) => ({
+                  value: level,
+                  label: FACE_SENSITIVITY_LABEL[level],
+                }))}
+              />
+            </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-slate">
+              The default was calibrated against synthetic faces, which resemble each other more
+              than real people do. If you see matches proposed for people who are plainly
+              different, move to Strict; if returning visitors are never recognised, try Lenient.
+            </p>
+          </Panel>
+        )}
+
+        {settings.faceRecognition && (
+          <div className="mt-2 flex items-start gap-2 px-1">
+            <ScanFace aria-hidden className="mt-0.5 size-3 shrink-0 text-caution" />
+            <p className="text-[11px] leading-relaxed text-caution">
+              Face signatures are stored for everyone observed, including people who never
+              return and were never asked. Recognition happens entirely on this device; frames
+              are never uploaded. Several states — Illinois, Texas and Washington among them —
+              regulate collecting biometric identifiers from members of the public, and some
+              require consent beforehand.
+            </p>
+          </div>
+        )}
 
         <div className="mt-2 flex items-start gap-2 px-1">
           <Eye aria-hidden className="mt-0.5 size-3 shrink-0 text-slate" />
@@ -159,6 +226,11 @@ export function SettingsScreen() {
               value={usage?.sightings ?? '—'}
             />
             <TelemetryValue className="px-3 py-3" label="Images" value={usage?.media ?? '—'} />
+            <TelemetryValue
+              className="px-3 py-3"
+              label="Face signatures"
+              value={usage?.faceEmbeddings ?? '—'}
+            />
             <TelemetryValue
               className="px-3 py-3"
               label="Image data"
@@ -192,6 +264,15 @@ export function SettingsScreen() {
           <Button variant="secondary" onClick={reset}>
             Reset preferences
           </Button>
+          {(usage?.faceEmbeddings ?? 0) > 0 && (
+            <Button
+              variant="danger"
+              onClick={() => setFacePurgeOpen(true)}
+              icon={<ScanFace aria-hidden className="size-3.5" />}
+            >
+              Delete face signatures
+            </Button>
+          )}
           <Button
             variant="danger"
             onClick={() => setPurgeOpen(true)}
@@ -229,6 +310,7 @@ export function SettingsScreen() {
           {usage && (
             <ul className="mt-4 flex flex-col gap-1 font-mono text-[11px] text-slate">
               <li>{usage.entities} entities</li>
+            <li>{usage.faceEmbeddings} face signatures</li>
               <li>{usage.sightings} sightings</li>
               <li>
                 {usage.media} images ({formatBytes(usage.mediaBytes)})
@@ -237,6 +319,35 @@ export function SettingsScreen() {
               <li>{usage.sessions} sessions</li>
             </ul>
           )}
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={facePurgeOpen}
+        onClose={() => setFacePurgeOpen(false)}
+        title="Delete face signatures"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="secondary" fullWidth onClick={() => setFacePurgeOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" fullWidth disabled={busy} onClick={() => void purgeFaces()}>
+              Delete signatures
+            </Button>
+          </div>
+        }
+      >
+        <div className="p-4">
+          <p className="text-[13px] leading-relaxed text-ash">
+            This removes every stored face signature — {usage?.faceEmbeddings ?? 0} of them —
+            from this device and from sync. Entities, sightings, notes and images are all kept;
+            only the biometric data is destroyed.
+          </p>
+          <p className="mt-3 text-[13px] leading-relaxed text-ash">
+            Recognition of returning subjects stops working until new signatures accumulate. If
+            you also want to stop collecting them, turn off face recognition above — deleting
+            alone does not.
+          </p>
         </div>
       </Sheet>
     </>

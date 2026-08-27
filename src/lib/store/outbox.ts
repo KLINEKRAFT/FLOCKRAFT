@@ -30,7 +30,8 @@ export type OutboxTable =
   | 'attributes'
   | 'notes'
   | 'associations'
-  | 'media';
+  | 'media'
+  | 'face_embeddings';
 
 export type OutboxOperation = 'upsert' | 'delete';
 
