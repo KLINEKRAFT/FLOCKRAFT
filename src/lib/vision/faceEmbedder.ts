@@ -67,8 +67,89 @@ export class FaceEmbedderLoadError extends Error {
  */
 export const MIN_FACE_PIXELS = 64;
 
-/** Minimum detector confidence for the face itself. */
-export const MIN_FACE_SCORE = 0.6;
+/**
+ * Minimum detector confidence for the face itself.
+ *
+ * Raised from 0.6 after a real session showed what 0.6 admits. Two subjects
+ * cleared it at 0.61 and 0.67, and their descriptors matched nothing —
+ * topping out at 0.36 against every other signature in the set, including
+ * each other. Every signature above 0.86 in the same session clustered
+ * sensibly, and one pair of repeat sightings of the same person scored 0.903.
+ *
+ * A marginal crop does not produce a weak identity, it produces noise stored
+ * as identity: a vector that will never match the person it came from, and
+ * might one day match someone else. Refusing it costs a signature that was
+ * worthless anyway.
+ */
+export const MIN_FACE_SCORE = 0.75;
+
+/**
+ * Score at which a descriptor is good enough to stop looking for a better one.
+ * Above this the marginal gain is not worth another inference.
+ */
+export const GOOD_FACE_SCORE = 0.9;
+
+/** Shortest gap between capture attempts within one observation. */
+export const FACE_RETRY_INTERVAL_MS = 1500;
+
+/** Attempts per observation, so a subject who lingers cannot run inference forever. */
+export const MAX_FACE_ATTEMPTS = 8;
+
+/** What one open observation has managed to capture so far. */
+export interface FaceCaptureState {
+  /** Detector score of the best descriptor captured; 0 when none. */
+  bestScore: number;
+  attempts: number;
+  lastAttemptAt: number;
+}
+
+export const INITIAL_FACE_CAPTURE: FaceCaptureState = {
+  bestScore: 0,
+  attempts: 0,
+  lastAttemptAt: 0,
+};
+
+/**
+ * Whether an open observation should try again for a face.
+ *
+ * The embedder used to run exactly once, at promotion. A real session showed
+ * the cost of that: the two longest looks of the session — 45.8 and 28.2
+ * seconds — produced no signature at all, because the one instant we checked
+ * happened to catch them turned away. Somebody standing in frame for
+ * three-quarters of a minute deserves more than one glance.
+ *
+ * Retrying is bounded on three axes so it cannot become the loop's problem:
+ * stop once the capture is good, wait between attempts, and cap the total.
+ */
+export function shouldAttemptFace(state: FaceCaptureState, now: number): boolean {
+  if (state.bestScore >= GOOD_FACE_SCORE) return false;
+  if (state.attempts >= MAX_FACE_ATTEMPTS) return false;
+  return now - state.lastAttemptAt >= FACE_RETRY_INTERVAL_MS;
+}
+
+/**
+ * Picks which of several open observations gets this tick's attempt.
+ *
+ * One attempt per tick regardless of how many people are in frame: inference
+ * cost is per-face, and a busy doorway would otherwise multiply it by the
+ * crowd. Subjects with nothing captured come first, then whoever has waited
+ * longest — so the queue drains rather than one subject monopolising it.
+ */
+export function pickFaceAttempt<T>(
+  candidates: Array<{ key: T; state: FaceCaptureState }>,
+  now: number,
+): T | null {
+  const eligible = candidates.filter((entry) => shouldAttemptFace(entry.state, now));
+  if (eligible.length === 0) return null;
+
+  eligible.sort((a, b) => {
+    const aHas = a.state.bestScore > 0 ? 1 : 0;
+    const bHas = b.state.bestScore > 0 ? 1 : 0;
+    if (aHas !== bHas) return aHas - bHas;
+    return a.state.lastAttemptAt - b.state.lastAttemptAt;
+  });
+  return eligible[0]!.key;
+}
 
 let human: Human | null = null;
 let loading: Promise<Human> | null = null;
