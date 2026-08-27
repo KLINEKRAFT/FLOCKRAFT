@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Button } from '@/components/ui/Button';
+import { buttonClasses } from '@/components/ui/Button';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { logError } from '@/lib/logger';
 
@@ -96,11 +96,11 @@ export function AuthCallback() {
           description="Observations recorded on this device will sync, and anything stored under this account will appear here."
           action={
             <div className="flex flex-wrap justify-center gap-2">
-              <Link href="/">
-                <Button variant="primary">Go to live</Button>
+              <Link href="/" className={buttonClasses({ variant: 'primary' })}>
+                Go to live
               </Link>
-              <Link href="/settings">
-                <Button variant="secondary">Settings</Button>
+              <Link href="/settings" className={buttonClasses({ variant: 'secondary' })}>
+                Settings
               </Link>
             </div>
           }
@@ -114,8 +114,8 @@ export function AuthCallback() {
           title="Sign-in failed"
           description={error ?? 'This link could not be used.'}
           action={
-            <Link href="/settings">
-              <Button variant="secondary">Back to settings</Button>
+            <Link href="/settings" className={buttonClasses({ variant: 'secondary' })}>
+              Back to settings
             </Link>
           }
         />

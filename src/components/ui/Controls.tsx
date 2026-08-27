@@ -43,7 +43,10 @@ export function Toggle({
           <p className="mt-1.5 text-[12px] leading-relaxed text-ash">{description}</p>
         )}
       </div>
-      <span className="relative mt-0.5 shrink-0">
+      {/* The visible track is 24px tall, but the input is stretched to a 44px
+          hit area around it. Sizing the input to the artwork would leave the
+          control below the comfortable touch target on every phone. */}
+      <span className="relative -my-2.5 flex h-11 shrink-0 items-center">
         <input
           id={id}
           type="checkbox"

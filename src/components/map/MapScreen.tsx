@@ -6,7 +6,7 @@ import { Crosshair, Info, MapPinOff } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Button } from '@/components/ui/Button';
+import { buttonClasses } from '@/components/ui/Button';
 import { Panel } from '@/components/ui/Panel';
 import { EntityLabel } from '@/components/ui/EntityLabel';
 import { TacticalMap, type MapLayers, type MapMarker } from './TacticalMap';
@@ -166,8 +166,8 @@ export function MapScreen() {
           title="Location capture is off"
           description="Enable location in privacy settings to record where observations were made. Existing observations will not gain a position retroactively."
           action={
-            <Link href="/settings">
-              <Button variant="primary">Open privacy settings</Button>
+            <Link href="/settings" className={buttonClasses({ variant: 'primary' })}>
+              Open privacy settings
             </Link>
           }
         />

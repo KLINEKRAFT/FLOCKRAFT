@@ -174,7 +174,9 @@ export function useDetectionPipeline({
 
       // Persist: promote qualifying tracks, close evicted ones.
       recorder.updateContext({ settings: current, location: locationRef.current });
-      await recorder.observe(update.tracks, frame, now);
+      // Both sources: the detector ran on the downscaled canvas, but
+      // thumbnails are cropped from the full-resolution video element.
+      await recorder.observe(update.tracks, { inference: frame, video }, now);
       if (update.ended.length > 0) {
         const closed = await recorder.close(update.ended, now);
         for (const observation of closed) onObservationRef.current?.(observation);

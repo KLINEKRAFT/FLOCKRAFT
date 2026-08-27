@@ -7,7 +7,12 @@ import { Divider, SectionLabel } from '@/components/ui/Panel';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { listDetectors } from '@/lib/vision/registry';
 import { DEFAULT_ENABLED_CLASSES } from '@/lib/taxonomy';
-import type { FlockraftSettings } from '@/lib/settings';
+import {
+  THUMBNAIL_SIZES,
+  THUMBNAIL_SIZE_BYTES,
+  THUMBNAIL_SIZE_LABEL,
+  type FlockraftSettings,
+} from '@/lib/settings';
 import type { PipelineStats } from '@/hooks/useDetectionPipeline';
 import type { DetectionClass } from '@/types/domain';
 import { cn } from '@/lib/cn';
@@ -148,6 +153,49 @@ export function DetectionSettingsSheet({
           checked={settings.lowPerformanceMode}
           onChange={(lowPerformanceMode) => onChange({ lowPerformanceMode })}
         />
+
+        <Divider className="my-4" />
+
+        <SectionLabel
+          action={
+            <span className="tabular font-mono text-[10px] text-slate">
+              {THUMBNAIL_SIZE_BYTES[settings.thumbnailSize] ?? ''} each
+            </span>
+          }
+        >
+          Image detail
+        </SectionLabel>
+
+        <div className="flex gap-1.5">
+          {THUMBNAIL_SIZES.map((size) => {
+            const active = settings.thumbnailSize === size;
+            return (
+              <button
+                key={size}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onChange({ thumbnailSize: size })}
+                disabled={!settings.saveImages}
+                className={cn(
+                  'min-h-11 flex-1 rounded-sm border px-2 font-mono text-[10px] tracking-[0.1em] uppercase transition-colors',
+                  'disabled:cursor-not-allowed disabled:opacity-40',
+                  active
+                    ? 'border-tactical/45 bg-tactical/12 text-tactical'
+                    : 'border-hairline bg-gunmetal text-slate hover:text-bone',
+                )}
+              >
+                <span className="block">{THUMBNAIL_SIZE_LABEL[size] ?? size}</span>
+                <span className="tabular mt-0.5 block text-[9px] opacity-70">{size}px</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-slate">
+          Thumbnails are cropped from the full camera frame, not the downscaled one the detector
+          uses — so this is real detail, and it does not slow detection. It is the main driver of
+          how much storage a day of observation costs.
+          {!settings.saveImages && ' Image capture is currently off.'}
+        </p>
 
         <Divider className="my-4" />
 
