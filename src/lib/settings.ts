@@ -54,6 +54,17 @@ export interface FlockraftSettings {
    */
   faceSensitivity: FaceSensitivity;
 
+  /**
+   * Days after which observations are deleted. 0 means keep everything.
+   *
+   * Defaults to 0 deliberately. Retention is the operator's decision, and a
+   * default that quietly deleted records they had been collecting would be
+   * the single worst thing this setting could do.
+   */
+  retentionDays: number;
+  /** Days after which face signatures are deleted. 0 means keep everything. */
+  faceRetentionDays: number;
+
   /** Target detector invocations per second. The preview stays at display rate. */
   detectionFps: number;
   /** Minimum detector score for a detection to enter the tracker. */
@@ -83,6 +94,8 @@ export const DEFAULT_SETTINGS: FlockraftSettings = {
   autoEntityMatching: false,
   faceRecognition: false,
   faceSensitivity: 'balanced',
+  retentionDays: 0,
+  faceRetentionDays: 0,
 
   detectionFps: 8,
   confidenceThreshold: 0.55,
@@ -131,6 +144,12 @@ function sanitize(settings: FlockraftSettings): FlockraftSettings {
     // Snap to the offered sizes: an arbitrary value from an older build or a
     // hand-edited store would silently change storage cost per observation.
     thumbnailSize: THUMBNAIL_SIZES.includes(settings.thumbnailSize) ? settings.thumbnailSize : 320,
+    retentionDays: RETENTION_CHOICES.includes(settings.retentionDays)
+      ? settings.retentionDays
+      : 0,
+    faceRetentionDays: RETENTION_CHOICES.includes(settings.faceRetentionDays)
+      ? settings.faceRetentionDays
+      : 0,
     faceSensitivity:
       settings.faceSensitivity in FACE_SENSITIVITY ? settings.faceSensitivity : 'balanced',
     enabledClasses: settings.enabledClasses?.length
@@ -138,6 +157,21 @@ function sanitize(settings: FlockraftSettings): FlockraftSettings {
       : DEFAULT_ENABLED_CLASSES,
   };
 }
+
+/**
+ * Retention windows offered, in days. 0 is "never" and is first because it is
+ * the default and the only non-destructive option.
+ */
+export const RETENTION_CHOICES: number[] = [0, 30, 60, 90, 180, 365];
+
+export const RETENTION_LABEL: Record<number, string> = {
+  0: 'Never',
+  30: '30 days',
+  60: '60 days',
+  90: '90 days',
+  180: '6 months',
+  365: '1 year',
+};
 
 /** Offered thumbnail sizes, smallest first. */
 export const THUMBNAIL_SIZES: number[] = [160, 320, 512];

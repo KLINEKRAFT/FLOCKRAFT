@@ -86,6 +86,12 @@ export interface ObservationRepository {
   deleteMedia(id: MediaId): Promise<void>;
 
   // ---- Maintenance --------------------------------------------------------
+  /**
+   * Applies a retention policy. Returns what it removed, by id, so a sync
+   * layer can propagate the deletions rather than have the next pull restore
+   * everything the sweep just cleared.
+   */
+  purgeExpired(cutoffs: PurgeCutoffs): Promise<PurgeResult>;
   /** Aggregate storage footprint, for the privacy screen. */
   usage(): Promise<StorageUsage>;
   /** Irreversibly removes every record. */
@@ -123,6 +129,37 @@ export const FULL_CASCADE: DeleteCascade = {
   associations: true,
   faceEmbeddings: true,
 };
+
+/**
+ * Instants before which records are removed. An absent or zero value means
+ * "keep everything of that kind" — retention is opt-in, and a default that
+ * silently deleted an operator's observations would be indefensible.
+ */
+export interface PurgeCutoffs {
+  /** Sightings and sessions that ended before this are removed. */
+  observationsBefore?: number;
+  /** Face descriptors created before this are removed. */
+  faceEmbeddingsBefore?: number;
+}
+
+/** Ids of everything a sweep removed, so the caller can report and sync it. */
+export interface PurgeResult {
+  sightings: string[];
+  entities: EntityId[];
+  sessions: SessionId[];
+  media: MediaId[];
+  faceEmbeddings: string[];
+}
+
+export function isPurgeEmpty(result: PurgeResult): boolean {
+  return (
+    result.sightings.length === 0 &&
+    result.entities.length === 0 &&
+    result.sessions.length === 0 &&
+    result.media.length === 0 &&
+    result.faceEmbeddings.length === 0
+  );
+}
 
 export interface StorageUsage {
   entities: number;
