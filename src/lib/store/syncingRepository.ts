@@ -4,6 +4,7 @@ import type {
   Entity,
   EntityId,
   EntityKind,
+  FaceEmbeddingRecord,
   MediaId,
   MediaRecord,
   Note,
@@ -220,6 +221,40 @@ export class SyncingRepository implements ObservationRepository {
 
   listAssociations(entityId: EntityId): Promise<Association[]> {
     return this.local.listAssociations(entityId);
+  }
+
+  /* ---- Face descriptors -------------------------------------------------- */
+
+  async putFaceEmbedding(record: FaceEmbeddingRecord): Promise<void> {
+    await this.local.putFaceEmbedding(record);
+    await this.#track('face_embeddings', 'upsert', record.id);
+  }
+
+  listFaceEmbeddings(): Promise<FaceEmbeddingRecord[]> {
+    return this.local.listFaceEmbeddings();
+  }
+
+  listFaceEmbeddingsFor(entityId: EntityId): Promise<FaceEmbeddingRecord[]> {
+    return this.local.listFaceEmbeddingsFor(entityId);
+  }
+
+  async deleteFaceEmbedding(id: string): Promise<void> {
+    await this.local.deleteFaceEmbedding(id);
+    await this.#track('face_embeddings', 'delete', id);
+  }
+
+  /**
+   * Deleting every descriptor is tracked per record, not as one bulk intent:
+   * the remote rows must go individually, and a purge the operator performed
+   * for privacy reasons is the last thing that should silently fail to
+   * propagate.
+   */
+  async purgeFaceEmbeddings(): Promise<void> {
+    const existing = await this.local.listFaceEmbeddings();
+    await this.local.purgeFaceEmbeddings();
+    for (const record of existing) {
+      await this.#track('face_embeddings', 'delete', record.id);
+    }
   }
 
   /* ---- Media ------------------------------------------------------------ */

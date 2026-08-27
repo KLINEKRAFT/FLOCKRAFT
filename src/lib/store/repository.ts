@@ -4,6 +4,7 @@ import type {
   Entity,
   EntityId,
   EntityKind,
+  FaceEmbeddingRecord,
   MediaId,
   MediaRecord,
   Note,
@@ -66,6 +67,17 @@ export interface ObservationRepository {
   recordAssociation(a: EntityId, b: EntityId, at: number): Promise<void>;
   listAssociations(entityId: EntityId): Promise<Association[]>;
 
+  // ---- Face descriptors ---------------------------------------------------
+  // Kept behind their own methods rather than folded into attributes: these are
+  // biometric identifiers and must be independently countable and deletable.
+  putFaceEmbedding(record: FaceEmbeddingRecord): Promise<void>;
+  /** Every stored descriptor. The matcher needs the whole gallery to compare. */
+  listFaceEmbeddings(): Promise<FaceEmbeddingRecord[]>;
+  listFaceEmbeddingsFor(entityId: EntityId): Promise<FaceEmbeddingRecord[]>;
+  deleteFaceEmbedding(id: string): Promise<void>;
+  /** Removes every descriptor, leaving observations intact. */
+  purgeFaceEmbeddings(): Promise<void>;
+
   // ---- Media --------------------------------------------------------------
   putMedia(record: MediaRecord): Promise<void>;
   getMedia(id: MediaId): Promise<MediaRecord | null>;
@@ -99,6 +111,7 @@ export interface DeleteCascade {
   media: boolean;
   notes: boolean;
   associations: boolean;
+  faceEmbeddings: boolean;
 }
 
 export const FULL_CASCADE: DeleteCascade = {
@@ -106,6 +119,7 @@ export const FULL_CASCADE: DeleteCascade = {
   media: true,
   notes: true,
   associations: true,
+  faceEmbeddings: true,
 };
 
 export interface StorageUsage {
@@ -115,6 +129,8 @@ export interface StorageUsage {
   mediaBytes: number;
   notes: number;
   sessions: number;
+  /** Stored face descriptors. Surfaced separately on the privacy screen. */
+  faceEmbeddings: number;
   /** Browser-reported quota, when the Storage API exposes it. */
   quotaBytes?: number;
   usageBytes?: number;

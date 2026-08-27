@@ -161,6 +161,45 @@ export type Database = {
         };
         Relationships: [];
       };
+      face_embeddings: {
+        Row: {
+          created_at: string;
+          descriptor: string;
+          dimensions: number;
+          entity_id: string;
+          id: string;
+          model: string;
+          score: number;
+          sighting_id: string | null;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          descriptor: string;
+          dimensions: number;
+          entity_id: string;
+          id?: string;
+          model: string;
+          score: number;
+          sighting_id?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          descriptor?: string;
+          dimensions?: number;
+          entity_id?: string;
+          id?: string;
+          model?: string;
+          score?: number;
+          sighting_id?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       media: {
         Row: {
           byte_size: number;

@@ -10,11 +10,13 @@ import {
   attributeToRow,
   entityToRow,
   mediaToRow,
+  faceEmbeddingToRow,
   noteToRow,
   rowToAssociation,
   rowToAttribute,
   rowToEntity,
   rowToMedia,
+  rowToFaceEmbedding,
   rowToNote,
   rowToSession,
   rowToSighting,
@@ -84,6 +86,8 @@ const PUSH_ORDER: OutboxEntry['table'][] = [
   'attributes',
   'notes',
   'associations',
+  // Last: references both entities and sightings, so both must already exist.
+  'face_embeddings',
 ];
 
 export class SyncEngine {
@@ -314,6 +318,12 @@ export class SyncEngine {
           else missing.add(id);
           break;
         }
+        case 'face_embeddings': {
+          const record = await this.#local.getFaceEmbedding(id);
+          if (record) payload.push(faceEmbeddingToRow(record, userId));
+          else missing.add(id);
+          break;
+        }
         case 'associations': {
           const entityId = entry.meta?.entityId;
           const otherEntityId = entry.meta?.otherEntityId;
@@ -501,6 +511,13 @@ export class SyncEngine {
       track(row.updated_at);
     }
 
+    // ---- face descriptors -----------------------------------------------
+    const embeddings = await this.#page('face_embeddings', userId, since);
+    for (const row of embeddings) {
+      await this.#local.putFaceEmbedding(rowToFaceEmbedding(row));
+      track(row.updated_at);
+    }
+
     if (newest !== since) {
       await this.#local.setSyncState(PULL_CURSOR_KEY, newest);
     }
@@ -548,7 +565,8 @@ type SyncTable =
   | 'attributes'
   | 'notes'
   | 'associations'
-  | 'media';
+  | 'media'
+  | 'face_embeddings';
 
 function describeError(error: unknown): string {
   if (isPostgrestError(error)) {
