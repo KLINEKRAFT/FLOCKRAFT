@@ -108,7 +108,14 @@ export async function loadFaceEmbedder(
         cacheSensitivity: 0,
         face: {
           enabled: true,
-          detector: { enabled: true, rotation: false, maxDetected: 1, return: true },
+          // `return: false` is load-bearing, not a default left alone. Setting
+          // it true hands back the cropped face tensor and makes the caller
+          // responsible for freeing it — Human's own documentation says it
+          // "must be manually deallocated to avoid memory leak". Nothing here
+          // reads that tensor, and leaving it enabled leaked one tensor and
+          // roughly 0.75 MB per observation: invisible in a short test, fatal
+          // over a day of watching a door.
+          detector: { enabled: true, rotation: false, maxDetected: 1, return: false },
           // Mesh off: the detector crop is what FaceRes consumes, and the mesh
           // is 1.5 MB of weights for landmarks nothing here reads.
           mesh: { enabled: false },
