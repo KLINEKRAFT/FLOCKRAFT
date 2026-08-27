@@ -78,6 +78,8 @@ export function LiveScreen() {
     settings,
     enabled: pipelineEnabled,
     location: settings.saveLocation ? geo.fix : null,
+    facingMode: camera.facingMode,
+    deviceLabel: camera.devices.find((device) => device.deviceId === camera.activeDeviceId)?.label,
     onObservation,
   });
 

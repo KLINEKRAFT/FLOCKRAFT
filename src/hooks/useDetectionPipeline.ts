@@ -58,6 +58,9 @@ export interface UseDetectionPipelineOptions {
   /** Pipeline only runs while this is true (camera active, page visible, …). */
   enabled: boolean;
   location: GeoFix | null;
+  /** Recorded on the session so a later review can say which camera it was. */
+  facingMode?: 'user' | 'environment';
+  deviceLabel?: string;
   onObservation?: (observation: RecordedObservation) => void;
 }
 
@@ -90,6 +93,8 @@ export function useDetectionPipeline({
   settings,
   enabled,
   location,
+  facingMode,
+  deviceLabel,
   onObservation,
 }: UseDetectionPipelineOptions): UseDetectionPipelineResult {
   const [runState, setRunState] = useState<RunState>('idle');
@@ -116,10 +121,12 @@ export function useDetectionPipeline({
   // reads them well after effects have flushed.
   const settingsRef = useRef(settings);
   const locationRef = useRef(location);
+  const cameraRef = useRef({ facingMode, deviceLabel });
   const onObservationRef = useRef(onObservation);
   useEffect(() => {
     settingsRef.current = settings;
     locationRef.current = location;
+    cameraRef.current = { facingMode, deviceLabel };
     onObservationRef.current = onObservation;
   });
 
@@ -308,6 +315,10 @@ export function useDetectionPipeline({
         detectorId,
         counts: { ...INITIAL_COUNTS },
         location: locationRef.current ?? undefined,
+        // Recorded once at the start: a session review that cannot say which
+        // camera produced it leaves the operator guessing between devices.
+        facingMode: cameraRef.current.facingMode,
+        deviceLabel: cameraRef.current.deviceLabel,
       });
       if (cancelled) return;
 

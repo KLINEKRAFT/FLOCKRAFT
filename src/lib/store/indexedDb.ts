@@ -330,6 +330,12 @@ export class IndexedDbRepository implements ObservationRepository {
     return sightings.sort((a, b) => b.startedAt - a.startedAt);
   }
 
+  async listSightingsForSession(sessionId: SessionId): Promise<Sighting[]> {
+    const db = await this.#open();
+    const all = await db.getAllFromIndex('sightings', 'sessionId', sessionId);
+    return all.sort((a, b) => a.startedAt - b.startedAt);
+  }
+
   async listTimeline(filter: TimelineFilter = {}): Promise<TimelineEvent[]> {
     const db = await this.#open();
     const sightings = await db.getAllFromIndex('sightings', 'startedAt');
