@@ -2,7 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Camera, Clock, Layers, Map as MapIcon, SlidersHorizontal } from 'lucide-react';
+import {
+  Camera,
+  Clock,
+  History,
+  Layers,
+  Map as MapIcon,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 /**
@@ -15,6 +22,7 @@ import { cn } from '@/lib/cn';
 export const NAV_ITEMS = [
   { href: '/', label: 'LIVE', icon: Camera },
   { href: '/timeline', label: 'TIMELINE', icon: Clock },
+  { href: '/sessions', label: 'SESSIONS', icon: History },
   { href: '/entities', label: 'ENTITIES', icon: Layers },
   { href: '/map', label: 'MAP', icon: MapIcon },
 ] as const;

@@ -56,6 +56,8 @@ export interface ObservationRepository {
   // ---- Sightings ----------------------------------------------------------
   addSighting(sighting: Sighting): Promise<void>;
   listSightings(entityId: EntityId): Promise<Sighting[]>;
+  /** Every sighting recorded during one session, oldest first. */
+  listSightingsForSession(sessionId: SessionId): Promise<Sighting[]>;
   listTimeline(filter?: TimelineFilter): Promise<TimelineEvent[]>;
 
   // ---- Attributes, notes, associations ------------------------------------

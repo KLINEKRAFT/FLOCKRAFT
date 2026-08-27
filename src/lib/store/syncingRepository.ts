@@ -181,6 +181,10 @@ export class SyncingRepository implements ObservationRepository {
     return this.local.listSightings(entityId);
   }
 
+  listSightingsForSession(sessionId: SessionId): Promise<Sighting[]> {
+    return this.local.listSightingsForSession(sessionId);
+  }
+
   listTimeline(filter?: TimelineFilter): Promise<TimelineEvent[]> {
     return this.local.listTimeline(filter);
   }
