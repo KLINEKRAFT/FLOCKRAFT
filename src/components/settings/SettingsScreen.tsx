@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { AlertTriangle, Database, Eye, HardDrive, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Eye, HardDrive, ShieldCheck } from 'lucide-react';
 import { TopBar } from '@/components/layout/TopBar';
 import { Panel, Divider, SectionLabel } from '@/components/ui/Panel';
 import { Toggle } from '@/components/ui/Controls';
@@ -13,6 +13,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { useRepositoryQuery } from '@/hooks/useRepositoryQuery';
 import { getRepository } from '@/lib/store';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { SyncPanel } from './SyncPanel';
 import { formatBytes } from '@/lib/format';
 
 /**
@@ -51,8 +52,8 @@ export function SettingsScreen() {
         title="SETTINGS"
         showSettings={false}
         status={
-          <StatusBadge tone={isSupabaseConfigured() ? 'nominal' : 'idle'} size="sm">
-            {isSupabaseConfigured() ? 'Sync configured' : 'Local only'}
+          <StatusBadge tone="idle" size="sm">
+            {isSupabaseConfigured() ? 'Sync available' : 'Local only'}
           </StatusBadge>
         }
       />
@@ -199,23 +200,7 @@ export function SettingsScreen() {
           </Button>
         </div>
 
-        {/* ---- Backend ---- */}
-        <SectionLabel className="mt-6">Backend</SectionLabel>
-        <Panel className="p-3">
-          <div className="flex items-start gap-3">
-            <Database aria-hidden className="mt-0.5 size-4 shrink-0 text-slate" />
-            <div>
-              <p className="font-mono text-[11px] tracking-[0.1em] text-bone uppercase">
-                {isSupabaseConfigured() ? 'Supabase configured' : 'No sync backend'}
-              </p>
-              <p className="mt-1.5 text-[12px] leading-relaxed text-ash">
-                {isSupabaseConfigured()
-                  ? 'Environment variables are present. Cross-device sync ships in a later milestone; the local database remains the source of truth.'
-                  : 'FLOCKRAFT runs entirely offline. Set the Supabase environment variables to enable sync when it ships.'}
-              </p>
-            </div>
-          </div>
-        </Panel>
+        <SyncPanel />
       </div>
 
       <Sheet

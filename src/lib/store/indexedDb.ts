@@ -11,9 +11,11 @@ import type {
   Session,
   SessionId,
   Sighting,
+  SightingId,
   TimelineEvent,
 } from '@/types/domain';
 import { createId } from '@/lib/id';
+import type { OutboxEntry } from './outbox';
 import { designationFor } from '@/lib/taxonomy';
 import {
   matchesSearch,
@@ -53,10 +55,18 @@ interface FlockraftDb extends DBSchema {
   associations: { key: string; value: Association; indexes: { entityId: EntityId } };
   media: { key: MediaId; value: MediaRecord; indexes: { entityId: EntityId } };
   counters: { key: string; value: { key: string; value: number } };
+  /** Pending sync intents. See `store/outbox.ts`. */
+  outbox: { key: string; value: OutboxEntry; indexes: { queuedAt: number } };
+  /** Sync cursors and bookkeeping, keyed by name. */
+  syncState: { key: string; value: { key: string; value: string | number | null } };
 }
 
 const DB_NAME = 'flockraft';
-const DB_VERSION = 1;
+/**
+ * v2 adds the sync outbox and cursor stores. The upgrade is purely additive —
+ * an existing local database keeps every observation it already holds.
+ */
+const DB_VERSION = 2;
 
 export class IndexedDbRepository implements ObservationRepository {
   readonly id = 'indexeddb';
@@ -71,34 +81,9 @@ export class IndexedDbRepository implements ObservationRepository {
       return Promise.reject(new Error('IndexedDB is unavailable in this browser context.'));
     }
     this.#db ??= openDB<FlockraftDb>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        const sessions = db.createObjectStore('sessions', { keyPath: 'id' });
-        sessions.createIndex('startedAt', 'startedAt');
-
-        const entities = db.createObjectStore('entities', { keyPath: 'id' });
-        entities.createIndex('kind', 'kind');
-        entities.createIndex('lastSeenAt', 'lastSeenAt');
-        // IndexedDB cannot index booleans; a string discriminant is used.
-        entities.createIndex('favorite', 'favoriteKey' as never);
-
-        const sightings = db.createObjectStore('sightings', { keyPath: 'id' });
-        sightings.createIndex('entityId', 'entityId');
-        sightings.createIndex('startedAt', 'startedAt');
-        sightings.createIndex('sessionId', 'sessionId');
-
-        const attributes = db.createObjectStore('attributes', { keyPath: 'id' });
-        attributes.createIndex('entityId', 'entityId');
-
-        const notes = db.createObjectStore('notes', { keyPath: 'id' });
-        notes.createIndex('entityId', 'entityId');
-
-        const associations = db.createObjectStore('associations', { keyPath: 'id' as never });
-        associations.createIndex('entityId', 'entityId');
-
-        const media = db.createObjectStore('media', { keyPath: 'id' });
-        media.createIndex('entityId', 'entityId');
-
-        db.createObjectStore('counters', { keyPath: 'key' });
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) createV1Stores(db);
+        if (oldVersion < 2) createV2Stores(db);
       },
     });
     return this.#db;
@@ -302,6 +287,23 @@ export class IndexedDbRepository implements ObservationRepository {
     await db.put('sightings', sighting);
   }
 
+  /** Direct lookup by id. The sync engine resolves queued records this way;
+   *  scanning every entity to find one sighting would be quadratic. */
+  async getSighting(id: SightingId): Promise<Sighting | null> {
+    const db = await this.#open();
+    return (await db.get('sightings', id)) ?? null;
+  }
+
+  async getAttribute(id: string): Promise<Attribute | null> {
+    const db = await this.#open();
+    return (await db.get('attributes', id)) ?? null;
+  }
+
+  async getNote(id: string): Promise<Note | null> {
+    const db = await this.#open();
+    return (await db.get('notes', id)) ?? null;
+  }
+
   async listSightings(entityId: EntityId): Promise<Sighting[]> {
     const db = await this.#open();
     const sightings = await db.getAllFromIndex('sightings', 'entityId', entityId);
@@ -399,6 +401,19 @@ export class IndexedDbRepository implements ObservationRepository {
     }
   }
 
+  /**
+   * Writes an association verbatim rather than incrementing it.
+   *
+   * `recordAssociation` accumulates, which is right for a live observation but
+   * wrong for a pulled row: the server's count is already absolute, and
+   * incrementing it would inflate the tally on every sync.
+   */
+  async putAssociation(association: Association): Promise<void> {
+    const db = await this.#open();
+    const key = associationKey(association.entityId, association.otherEntityId);
+    await db.put('associations', { ...association, id: key } as Association & { id: string });
+  }
+
   async listAssociations(entityId: EntityId): Promise<Association[]> {
     const db = await this.#open();
     const associations = await db.getAllFromIndex('associations', 'entityId', entityId);
@@ -420,6 +435,69 @@ export class IndexedDbRepository implements ObservationRepository {
   async deleteMedia(id: MediaId): Promise<void> {
     const db = await this.#open();
     await db.delete('media', id);
+  }
+
+  /* ---- Sync outbox ------------------------------------------------------ */
+
+  /**
+   * Records a sync intent.
+   *
+   * Entries are keyed per record rather than per edit, so ten rapid changes to
+   * one entity collapse to a single pending upload of its final state. A
+   * `delete` supersedes a pending `upsert` for the same record — uploading a
+   * row and then deleting it is wasted round-trips, and the intermediate state
+   * was never observed by anyone.
+   */
+  async enqueue(entry: Omit<OutboxEntry, 'queuedAt' | 'attempts'>): Promise<void> {
+    const db = await this.#open();
+    const existing = await db.get('outbox', entry.id);
+    if (existing?.op === 'delete' && entry.op === 'upsert') return;
+    await db.put('outbox', {
+      ...entry,
+      queuedAt: existing?.queuedAt ?? Date.now(),
+      attempts: 0,
+    });
+  }
+
+  /** Oldest-first, so causally-ordered edits replay in the order they happened. */
+  async listOutbox(limit = 200): Promise<OutboxEntry[]> {
+    const db = await this.#open();
+    const entries = await db.getAllFromIndex('outbox', 'queuedAt');
+    return entries.slice(0, limit);
+  }
+
+  async dequeue(id: string): Promise<void> {
+    const db = await this.#open();
+    await db.delete('outbox', id);
+  }
+
+  async markOutboxFailure(id: string, error: string): Promise<void> {
+    const db = await this.#open();
+    const existing = await db.get('outbox', id);
+    if (!existing) return;
+    await db.put('outbox', { ...existing, attempts: existing.attempts + 1, lastError: error });
+  }
+
+  async outboxSize(): Promise<number> {
+    const db = await this.#open();
+    return db.count('outbox');
+  }
+
+  async clearOutbox(): Promise<void> {
+    const db = await this.#open();
+    await db.clear('outbox');
+  }
+
+  /* ---- Sync cursors ----------------------------------------------------- */
+
+  async getSyncState(key: string): Promise<string | number | null> {
+    const db = await this.#open();
+    return (await db.get('syncState', key))?.value ?? null;
+  }
+
+  async setSyncState(key: string, value: string | number | null): Promise<void> {
+    const db = await this.#open();
+    await db.put('syncState', { key, value });
   }
 
   /* ---- Maintenance ------------------------------------------------------ */
@@ -464,6 +542,8 @@ export class IndexedDbRepository implements ObservationRepository {
       'associations',
       'media',
       'counters',
+      'outbox',
+      'syncState',
     ] as const;
     const tx = db.transaction(stores, 'readwrite');
     await Promise.all(stores.map((store) => tx.objectStore(store).clear()));
@@ -472,6 +552,48 @@ export class IndexedDbRepository implements ObservationRepository {
 }
 
 /* -------------------------------------------------------------------------- */
+
+/** Object stores present since the first release. */
+function createV1Stores(db: IDBPDatabase<FlockraftDb>): void {
+  const sessions = db.createObjectStore('sessions', { keyPath: 'id' });
+  sessions.createIndex('startedAt', 'startedAt');
+
+  const entities = db.createObjectStore('entities', { keyPath: 'id' });
+  entities.createIndex('kind', 'kind');
+  entities.createIndex('lastSeenAt', 'lastSeenAt');
+  // IndexedDB cannot index booleans; a string discriminant is used.
+  entities.createIndex('favorite', 'favoriteKey' as never);
+
+  const sightings = db.createObjectStore('sightings', { keyPath: 'id' });
+  sightings.createIndex('entityId', 'entityId');
+  sightings.createIndex('startedAt', 'startedAt');
+  sightings.createIndex('sessionId', 'sessionId');
+
+  const attributes = db.createObjectStore('attributes', { keyPath: 'id' });
+  attributes.createIndex('entityId', 'entityId');
+
+  const notes = db.createObjectStore('notes', { keyPath: 'id' });
+  notes.createIndex('entityId', 'entityId');
+
+  const associations = db.createObjectStore('associations', { keyPath: 'id' as never });
+  associations.createIndex('entityId', 'entityId');
+
+  const media = db.createObjectStore('media', { keyPath: 'id' });
+  media.createIndex('entityId', 'entityId');
+
+  db.createObjectStore('counters', { keyPath: 'key' });
+}
+
+/**
+ * v2: sync support. Purely additive — an existing local database keeps every
+ * observation it already holds, and a device that never signs in simply leaves
+ * both stores empty.
+ */
+function createV2Stores(db: IDBPDatabase<FlockraftDb>): void {
+  const outbox = db.createObjectStore('outbox', { keyPath: 'id' });
+  outbox.createIndex('queuedAt', 'queuedAt');
+  db.createObjectStore('syncState', { keyPath: 'key' });
+}
 
 const associationKey = (a: EntityId, b: EntityId) => `${a}::${b}`;
 
