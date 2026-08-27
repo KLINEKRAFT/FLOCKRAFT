@@ -124,33 +124,47 @@ export function DetectionOverlay({
               <VelocityIndicator direction={track.direction} color={accent.color} />
             )}
 
+            {/*
+              The visible chip stays small so it never obscures the subject,
+              but the button itself carries transparent vertical padding so the
+              touch target reaches a usable height. A pseudo-element would work
+              visually but leaves the element's own box unchanged, which makes
+              the target unmeasurable — and untestable.
+            */}
             <button
               type="button"
               onClick={() => onSelect?.(track)}
               disabled={!onSelect}
+              aria-label={`${track.label}, ${Math.round(track.score * 100)} percent confidence`}
               className={cn(
-                'absolute left-0 flex max-w-[240px] items-center gap-1.5 rounded-xs px-1.5 py-0.5',
-                'border font-mono text-[9px] tracking-[0.1em] whitespace-nowrap uppercase backdrop-blur-[2px]',
+                'absolute left-0 flex items-center bg-transparent px-0 py-3',
                 onSelect ? 'pointer-events-auto cursor-pointer' : 'cursor-default',
-                labelBelow ? 'top-full mt-1' : 'bottom-full mb-1',
+                labelBelow ? 'top-full' : 'bottom-full',
               )}
-              style={{
-                color: accent.color,
-                borderColor: `${accent.color}66`,
-                backgroundColor: 'rgba(7, 9, 10, 0.72)',
-              }}
             >
-              <span>{track.entityId ? track.label.replace(/ TEMP-\d+$/, '') : track.label}</span>
-              <span className="tabular opacity-70">{Math.round(track.score * 100)}%</span>
-              {track.candidateMatch && (
-                <span
-                  className="ml-0.5 border-l pl-1.5 text-caution"
-                  style={{ borderColor: `${accent.color}44` }}
-                  title="Possible match — confirmation required"
-                >
-                  ?
-                </span>
-              )}
+              <span
+                className={cn(
+                  'flex max-w-[240px] items-center gap-1.5 rounded-xs border px-1.5 py-0.5',
+                  'font-mono text-[9px] tracking-[0.1em] whitespace-nowrap uppercase backdrop-blur-[2px]',
+                )}
+                style={{
+                  color: accent.color,
+                  borderColor: `${accent.color}66`,
+                  backgroundColor: 'rgba(7, 9, 10, 0.72)',
+                }}
+              >
+                <span>{track.entityId ? track.label.replace(/ TEMP-\d+$/, '') : track.label}</span>
+                <span className="tabular opacity-70">{Math.round(track.score * 100)}%</span>
+                {track.candidateMatch && (
+                  <span
+                    className="ml-0.5 border-l pl-1.5 text-caution"
+                    style={{ borderColor: `${accent.color}44` }}
+                    title="Possible match — confirmation required"
+                  >
+                    ?
+                  </span>
+                )}
+              </span>
             </button>
           </div>
         );

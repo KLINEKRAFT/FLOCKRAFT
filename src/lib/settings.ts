@@ -13,6 +13,15 @@ export interface FlockraftSettings {
   saveObservations: boolean;
   /** Persist representative thumbnails alongside sightings. */
   saveImages: boolean;
+  /**
+   * Thumbnail edge length in pixels.
+   *
+   * Cropped from the full-resolution camera frame, so this is real detail
+   * rather than upscaling — but it is also the single biggest driver of how
+   * much storage a day of observation consumes, and of how much a sync
+   * uploads. Roughly 4-8 KB at 160, 15-25 KB at 320, 35-55 KB at 512.
+   */
+  thumbnailSize: number;
   /** Persist short event clips. Off by default — storage and privacy cost. */
   saveClips: boolean;
   /** Attach a geographic fix to sightings. Requires geolocation permission. */
@@ -46,6 +55,9 @@ export interface FlockraftSettings {
 export const DEFAULT_SETTINGS: FlockraftSettings = {
   saveObservations: true,
   saveImages: true,
+  // 160 was too small to recognise a person later, which is the entire point of
+  // keeping the image. 320 costs a few KB more and is legible.
+  thumbnailSize: 320,
   saveClips: false,
   saveLocation: false,
   faceAnalysis: false,
@@ -95,11 +107,30 @@ function sanitize(settings: FlockraftSettings): FlockraftSettings {
     detectionFps: clamp(settings.detectionFps, 1, 15),
     confidenceThreshold: clamp(settings.confidenceThreshold, 0.2, 0.95),
     observationThresholdMs: clamp(settings.observationThresholdMs, 300, 10_000),
+    // Snap to the offered sizes: an arbitrary value from an older build or a
+    // hand-edited store would silently change storage cost per observation.
+    thumbnailSize: THUMBNAIL_SIZES.includes(settings.thumbnailSize) ? settings.thumbnailSize : 320,
     enabledClasses: settings.enabledClasses?.length
       ? settings.enabledClasses
       : DEFAULT_ENABLED_CLASSES,
   };
 }
+
+/** Offered thumbnail sizes, smallest first. */
+export const THUMBNAIL_SIZES: number[] = [160, 320, 512];
+
+export const THUMBNAIL_SIZE_LABEL: Record<number, string> = {
+  160: 'Standard',
+  320: 'High',
+  512: 'Maximum',
+};
+
+/** Rough encoded size per thumbnail, for the storage-cost hint in settings. */
+export const THUMBNAIL_SIZE_BYTES: Record<number, string> = {
+  160: '~6 KB',
+  320: '~20 KB',
+  512: '~45 KB',
+};
 
 const clamp = (value: number, min: number, max: number) =>
   Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min;

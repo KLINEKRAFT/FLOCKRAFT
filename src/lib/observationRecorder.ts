@@ -47,6 +47,16 @@ export interface RecorderContext {
   location: GeoFix | null;
 }
 
+/** Frame sources for one detection tick. */
+export interface FrameSources {
+  /** Downscaled canvas the detector ran on. */
+  inference: HTMLCanvasElement | null;
+  /** Full-resolution camera frame, when the element is available. */
+  video: HTMLVideoElement | null;
+}
+
+type EncodedThumbnail = { blob: Blob; width: number; height: number };
+
 export interface RecordedObservation {
   sighting: Sighting;
   entity: Entity;
@@ -81,7 +91,7 @@ export class ObservationRecorder {
    * derived from. Promotes qualifying tracks and refreshes representative
    * media for tracks already open.
    */
-  async observe(tracks: Track[], frame: HTMLCanvasElement | null, now: number): Promise<void> {
+  async observe(tracks: Track[], sources: FrameSources, now: number): Promise<void> {
     const { settings } = this.#context;
     if (!settings.saveObservations) return;
 
@@ -92,9 +102,19 @@ export class ObservationRecorder {
       if (existing) {
         // Keep the highest-confidence frame as the representative image: the
         // first qualifying frame is often the moment of partial entry.
-        if (frame && settings.saveImages && track.score > existing.bestScore + 0.05) {
-          existing.bestScore = track.score;
-          existing.pendingBestFrame = { frame, box: track.box };
+        //
+        // The crop happens NOW rather than being deferred to close. The
+        // inference canvas is a single buffer reused every tick, so holding a
+        // reference to it and cropping minutes later would encode whatever the
+        // camera happens to be looking at then, positioned by a box captured
+        // long before. Encoding immediately is the only way the pixels and the
+        // box describe the same instant.
+        if (settings.saveImages && track.score > existing.bestScore + 0.05) {
+          const better = await this.#encodeThumbnail(sources, track.box);
+          if (better) {
+            existing.bestScore = track.score;
+            existing.pendingBestBlob = better;
+          }
         }
         existing.lastSeenAt = now;
         existing.peakScore = Math.max(existing.peakScore, track.peakScore);
@@ -103,7 +123,7 @@ export class ObservationRecorder {
 
       if (dwell < settings.observationThresholdMs) continue;
 
-      await this.#promote(track, frame, now);
+      await this.#promote(track, sources, now);
     }
 
     // Co-visibility is counted once per pair per overlapping observation, not
@@ -211,7 +231,8 @@ export class ObservationRecorder {
     }
   }
 
-  async #promote(track: Track, frame: HTMLCanvasElement | null, now: number): Promise<void> {
+  async #promote(track: Track, sources: FrameSources, now: number): Promise<void> {
+    const frame = sources.inference;
     const { repository, settings } = this.#context;
 
     // Appearance sampling happens once at promotion, on the frame that
@@ -279,11 +300,10 @@ export class ObservationRecorder {
     // by a higher-confidence frame, but an interrupted observation then still
     // carries a usable thumbnail rather than a placeholder.
     let thumbnailId: MediaId | undefined;
-    if (settings.saveImages && frame) {
-      const media = await this.#storeThumbnail(
-        { entityId: entity.id, pendingBestFrame: { frame, box: track.box } },
-        this.#context.sessionId,
-      );
+    let promotionBlob: EncodedThumbnail | null = null;
+    if (settings.saveImages) {
+      promotionBlob = await this.#encodeThumbnail(sources, track.box);
+      const media = await this.#storeThumbnail(entity.id, promotionBlob, this.#context.sessionId);
       thumbnailId = media?.id;
       if (thumbnailId) {
         entity.thumbnailId = thumbnailId;
@@ -328,7 +348,7 @@ export class ObservationRecorder {
       lastSeenAt: now,
       peakScore: track.peakScore,
       bestScore: track.score,
-      pendingBestFrame: null,
+      pendingBestBlob: null,
       thumbnailId,
       attributes: bound,
       class: track.class,
@@ -352,8 +372,8 @@ export class ObservationRecorder {
     // thumbnail stored then, and the superseded one is deleted rather than left
     // orphaned in storage.
     let thumbnailId = open.thumbnailId;
-    if (settings.saveImages && open.pendingBestFrame) {
-      const media = await this.#storeThumbnail(open, sessionId);
+    if (settings.saveImages && open.pendingBestBlob) {
+      const media = await this.#storeThumbnail(open.entityId, open.pendingBestBlob, sessionId);
       if (media) {
         if (open.thumbnailId) await repository.deleteMedia(open.thumbnailId);
         thumbnailId = media.id;
@@ -409,27 +429,46 @@ export class ObservationRecorder {
     return { sighting, entity: updated, isNewEntity: open.isNewEntity };
   }
 
-  /** Crops and stores the representative image for an observation. */
+  /**
+   * Encodes a thumbnail from the best available source.
+   *
+   * The video element is preferred over the inference canvas: the canvas is
+   * downscaled for detection speed, so cropping it caps thumbnail detail at
+   * roughly a third of what the camera actually captured.
+   */
+  async #encodeThumbnail(
+    sources: FrameSources,
+    box: Track['box'],
+  ): Promise<EncodedThumbnail | null> {
+    const { settings } = this.#context;
+    const source = sources.video ?? sources.inference;
+    if (!source) return null;
+    try {
+      return await cropThumbnail(source, box, { size: settings.thumbnailSize });
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persists an already-encoded thumbnail. */
   async #storeThumbnail(
-    open: Pick<OpenObservation, 'entityId' | 'pendingBestFrame'>,
+    entityId: EntityId,
+    encoded: EncodedThumbnail | null,
     sessionId: SessionId,
   ): Promise<MediaRecord | null> {
-    const pending = open.pendingBestFrame;
-    if (!pending) return null;
+    if (!encoded) return null;
     try {
-      const cropped = await cropThumbnail(pending.frame, pending.box);
-      if (!cropped) return null;
       const record: MediaRecord = {
         id: createId('med'),
-        entityId: open.entityId,
+        entityId,
         sessionId,
         kind: 'thumbnail',
-        mimeType: cropped.blob.type || 'image/jpeg',
-        width: cropped.width,
-        height: cropped.height,
-        byteSize: cropped.blob.size,
+        mimeType: encoded.blob.type || 'image/jpeg',
+        width: encoded.width,
+        height: encoded.height,
+        byteSize: encoded.blob.size,
         createdAt: Date.now(),
-        blob: cropped.blob,
+        blob: encoded.blob,
       };
       await this.#context.repository.putMedia(record);
       return record;
@@ -451,7 +490,8 @@ interface OpenObservation {
   lastSeenAt: number;
   peakScore: number;
   bestScore: number;
-  pendingBestFrame: { frame: HTMLCanvasElement; box: Track['box'] } | null;
+  /** Already-encoded better frame, awaiting the observation's close. */
+  pendingBestBlob: EncodedThumbnail | null;
   /** Thumbnail stored so far; replaced only if a better frame arrives. */
   thumbnailId?: MediaId;
   attributes: Attribute[];

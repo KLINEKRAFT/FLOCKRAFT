@@ -30,6 +30,29 @@ const SIZE: Record<Size, string> = {
   lg: 'h-12 px-5 text-sm',
 };
 
+/**
+ * The button's visual recipe, exported so a navigation control can *be* a link
+ * rather than a link wrapping a button.
+ *
+ * `<a>` may not contain `<button>` — nested interactive elements are invalid
+ * HTML and screen readers handle them unpredictably, announcing either one or
+ * both unreliably. Anywhere the target is a route, use `<Link className={
+ * buttonClasses(...)}>` instead of `<Link><Button/></Link>`.
+ */
+export function buttonClasses(
+  options: { variant?: Variant; size?: Size; fullWidth?: boolean; className?: string } = {},
+): string {
+  const { variant = 'secondary', size = 'md', fullWidth, className } = options;
+  return cn(
+    'inline-flex items-center justify-center gap-2 rounded-sm border font-mono tracking-[0.12em] uppercase',
+    'transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40',
+    VARIANT[variant],
+    SIZE[size],
+    fullWidth && 'w-full',
+    className,
+  );
+}
+
 export function Button({
   variant = 'secondary',
   size = 'md',
@@ -43,14 +66,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-sm border font-mono tracking-[0.12em] uppercase',
-        'transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40',
-        VARIANT[variant],
-        SIZE[size],
-        fullWidth && 'w-full',
-        className,
-      )}
+      className={buttonClasses({ variant, size, fullWidth, className })}
       {...rest}
     >
       {icon}

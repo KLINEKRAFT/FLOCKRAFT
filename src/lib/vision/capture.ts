@@ -30,46 +30,72 @@ export function captureFrame(video: HTMLVideoElement, maxEdge = 480): HTMLCanvas
   return scratch;
 }
 
+/** A frame source that can be cropped. Video is preferred — see below. */
+export type CropSource = HTMLVideoElement | HTMLCanvasElement;
+
+function sourceSize(source: CropSource): { width: number; height: number } {
+  return source instanceof HTMLVideoElement
+    ? { width: source.videoWidth, height: source.videoHeight }
+    : { width: source.width, height: source.height };
+}
+
 /**
  * Crops a normalised box out of a frame and encodes it as a JPEG blob.
  *
+ * **Crop from the video element, not the inference canvas.** The canvas passed
+ * to the detector is downscaled to ~480px on its long edge for speed, so a
+ * person filling a third of the frame is only ~160px tall in it. Cropping that
+ * and asking for a 320px thumbnail just upscales blur. The video element still
+ * holds the full sensor frame — typically 1280x720 — and cropping from it is
+ * what actually buys resolution. It costs nothing extra: this runs once per
+ * observation, not once per detection tick.
+ *
  * The crop is padded outward because detector boxes sit tight against the
- * subject, and a thumbnail with no margin is hard to recognise later. JPEG at
- * 0.72 keeps a 160 px thumbnail in the 4-8 KB range, which is what makes it
- * viable to retain thousands of them in IndexedDB.
+ * subject, and a thumbnail with no margin is hard to recognise later.
  */
 export async function cropThumbnail(
-  frame: HTMLCanvasElement,
+  frame: CropSource,
   box: NormalizedBox,
   options: { size?: number; padding?: number; quality?: number } = {},
 ): Promise<{ blob: Blob; width: number; height: number } | null> {
-  const { size = 160, padding = 0.14, quality = 0.72 } = options;
+  const { size = 320, padding = 0.14, quality = 0.82 } = options;
+
+  const { width: fw, height: fh } = sourceSize(frame);
+  if (fw === 0 || fh === 0) return null;
 
   const padX = box.width * padding;
   const padY = box.height * padding;
-  const sx = Math.max(0, (box.x - padX) * frame.width);
-  const sy = Math.max(0, (box.y - padY) * frame.height);
-  const sw = Math.min(frame.width - sx, (box.width + padX * 2) * frame.width);
-  const sh = Math.min(frame.height - sy, (box.height + padY * 2) * frame.height);
+  const sx = Math.max(0, (box.x - padX) * fw);
+  const sy = Math.max(0, (box.y - padY) * fh);
+  const sw = Math.min(fw - sx, (box.width + padX * 2) * fw);
+  const sh = Math.min(fh - sy, (box.height + padY * 2) * fh);
   if (sw < 8 || sh < 8) return null;
 
   // Square output, letterboxed on the shorter axis, so grids stay uniform.
+  // Never upscale past the source crop: producing a 512px thumbnail from a
+  // 180px subject makes a bigger file with no more detail in it.
+  const edge = Math.min(size, Math.max(64, Math.round(Math.max(sw, sh))));
   const out = document.createElement('canvas');
-  out.width = size;
-  out.height = size;
+  out.width = edge;
+  out.height = edge;
   const ctx = out.getContext('2d');
   if (!ctx) return null;
 
-  ctx.fillStyle = '#0b0e10';
-  ctx.fillRect(0, 0, size, size);
+  // Smoothing matters when downscaling a large crop; the default is nearest-
+  // neighbour in some engines, which makes faces look posterised.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
-  const scale = Math.min(size / sw, size / sh);
+  ctx.fillStyle = '#0b0e10';
+  ctx.fillRect(0, 0, edge, edge);
+
+  const scale = Math.min(edge / sw, edge / sh);
   const dw = sw * scale;
   const dh = sh * scale;
-  ctx.drawImage(frame, sx, sy, sw, sh, (size - dw) / 2, (size - dh) / 2, dw, dh);
+  ctx.drawImage(frame, sx, sy, sw, sh, (edge - dw) / 2, (edge - dh) / 2, dw, dh);
 
   const blob = await canvasToBlob(out, 'image/jpeg', quality);
-  return blob ? { blob, width: size, height: size } : null;
+  return blob ? { blob, width: edge, height: edge } : null;
 }
 
 /** Full-frame snapshot at native resolution, for the manual capture control. */
