@@ -317,6 +317,23 @@ export function SettingsScreen() {
               </div>
             </div>
           )}
+          {usage?.persisted !== undefined && (
+            <div className="border-t border-hairline px-3 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="fk-label">Durability</span>
+                <span
+                  className={`font-mono text-[10px] ${usage.persisted ? 'text-tactical' : 'text-ash'}`}
+                >
+                  {usage.persisted ? 'PERSISTENT' : 'BEST-EFFORT'}
+                </span>
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed text-slate">
+                {usage.persisted
+                  ? 'The browser has agreed not to evict this record to reclaim space.'
+                  : 'The browser may clear this record to reclaim space. Export anything you need to keep, and installing this app to the home screen makes a durable grant more likely.'}
+              </p>
+            </div>
+          )}
         </Panel>
 
         <SectionLabel className="mt-6">Retention</SectionLabel>

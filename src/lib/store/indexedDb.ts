@@ -30,6 +30,7 @@ import {
   type StorageUsage,
   type TimelineFilter,
 } from './repository';
+import { isStoragePersisted } from '@/lib/storagePersistence';
 
 /**
  * LOCAL-FIRST STORE
@@ -703,6 +704,7 @@ export class IndexedDbRepository implements ObservationRepository {
       faceEmbeddings: await db.count('faceEmbeddings'),
       quotaBytes,
       usageBytes,
+      persisted: await isStoragePersisted(),
     };
   }
 

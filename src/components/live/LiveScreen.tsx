@@ -30,6 +30,8 @@ import { getRepository } from '@/lib/store';
 import { createId } from '@/lib/id';
 import { formatClock, formatCoord } from '@/lib/format';
 import { logError } from '@/lib/logger';
+import { useWakeLock } from '@/hooks/useWakeLock';
+import { requestPersistentStorage } from '@/lib/storagePersistence';
 
 /**
  * LIVE — the primary screen.
@@ -68,6 +70,14 @@ export function LiveScreen() {
 
   const pipelineEnabled = camera.status === 'active' && visible && !paused && hydrated;
 
+  /*
+   * Deliberately not `pipelineEnabled`: that includes `visible`, so the lock
+   * would be torn down and rebuilt on every visibility flip. What matters is
+   * whether the operator has a session going — the manager re-acquires on
+   * return by itself.
+   */
+  useWakeLock(camera.status === 'active' && !paused);
+
   const onObservation = useCallback((observation: RecordedObservation) => {
     // Newest first, bounded — the live log is a window, not an archive.
     setRecent((current) => [observation, ...current].slice(0, 30));
@@ -90,6 +100,10 @@ export function LiveScreen() {
     if (!hydrated || startedRef.current) return;
     startedRef.current = true;
     void camera.start();
+    // Asked for once per load, before anything is recorded. A refusal is not
+    // surfaced here — the privacy screen reports the standing state, which is
+    // where an operator can act on it.
+    void requestPersistentStorage();
   }, [hydrated, camera]);
 
   // Header clock. Rendered null on the server so the markup matches, then
