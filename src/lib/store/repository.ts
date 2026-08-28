@@ -173,6 +173,13 @@ export interface StorageUsage {
   /** Browser-reported quota, when the Storage API exposes it. */
   quotaBytes?: number;
   usageBytes?: number;
+  /**
+   * Whether the browser has granted durable storage. `false` means the record
+   * is evictable under storage pressure; `undefined` means the browser will not
+   * say. Reported rather than assumed — the difference matters to anyone
+   * relying on this as a record rather than a cache.
+   */
+  persisted?: boolean;
 }
 
 /** Case-insensitive substring match across a record's searchable text. */

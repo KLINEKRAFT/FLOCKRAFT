@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { shouldResumeCamera } from '@/lib/cameraLifecycle';
 
 /**
  * CAMERA LIFECYCLE
@@ -17,6 +18,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  *    native player instead of compositing the overlay.
  *  - Tracks must be stopped on unmount and on `pagehide`, or the camera
  *    indicator stays lit and the device keeps drawing power.
+ *  - Having released on `pagehide`, the camera must be re-acquired when the
+ *    page comes back. iOS freezes the tab on screen sleep, an incoming call or
+ *    an app switch, and nothing restarts a stopped track on its own. Without
+ *    this the app looks alive on return while recording nothing.
  */
 
 export type CameraStatus =
@@ -73,6 +78,17 @@ export function useCamera(): UseCameraResult {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  /**
+   * Whether the operator wants the camera running. Distinct from whether a
+   * stream is attached: the platform revokes the stream freely, the operator's
+   * intent survives that and is what authorises an automatic resume.
+   */
+  const wantedRef = useRef(false);
+  /** Options of the last start, so a resume returns to the same device. */
+  const lastRequestRef = useRef<{ deviceId?: string; facingMode?: FacingMode }>({});
+  /** True while `getUserMedia` is in flight; see `shouldResumeCamera`. */
+  const startingRef = useRef(false);
+
   const [status, setStatus] = useState<CameraStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [devices, setDevices] = useState<CameraDevice[]>([]);
@@ -83,8 +99,11 @@ export function useCamera(): UseCameraResult {
   const [zoom, setZoomState] = useState(1);
   const [resolution, setResolution] = useState<{ width: number; height: number } | null>(null);
 
-  /** Stops every track and detaches the element. Safe to call repeatedly. */
-  const stop = useCallback(() => {
+  /**
+   * Drops the stream without touching intent. This is what the platform forces
+   * on us — a frozen tab, a device switch — and what a resume undoes.
+   */
+  const release = useCallback(() => {
     const stream = streamRef.current;
     if (stream) {
       for (const track of stream.getTracks()) track.stop();
@@ -96,6 +115,15 @@ export function useCamera(): UseCameraResult {
     setResolution(null);
     setCapabilities(NO_CAPABILITIES);
   }, []);
+
+  /**
+   * The operator turning the camera off. Clears intent, so nothing here or in
+   * the resume path will bring it back without another explicit start.
+   */
+  const stop = useCallback(() => {
+    wantedRef.current = false;
+    release();
+  }, [release]);
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -125,8 +153,15 @@ export function useCamera(): UseCameraResult {
         return;
       }
 
+      // Recorded before the request, not after: a resume triggered while the
+      // very first start is still awaiting permission must still know the
+      // camera was wanted.
+      wantedRef.current = true;
+      lastRequestRef.current = options;
+      startingRef.current = true;
+
       // iOS permits one live camera track; release the old one first.
-      stop();
+      release();
       setStatus('requesting');
       setError(null);
 
@@ -199,9 +234,11 @@ export function useCamera(): UseCameraResult {
           setStatus('error');
           setError(cause instanceof Error ? cause.message : 'Camera failed to start.');
         }
+      } finally {
+        startingRef.current = false;
       }
     },
-    [facingMode, refreshDevices, stop],
+    [facingMode, refreshDevices, release],
   );
 
   const flip = useCallback(async () => {
@@ -240,17 +277,63 @@ export function useCamera(): UseCameraResult {
     }
   }, []);
 
-  // Release the camera on unmount and when the page is being torn down. The
-  // `pagehide` listener matters on iOS, where unmount may never run before the
-  // tab is frozen.
+  /*
+   * Latest `start` and `status` behind refs so the resume listeners below can
+   * be registered once. Binding them directly would re-subscribe on every
+   * status transition, and a listener that re-registers during a permission
+   * prompt is exactly where a resume gets dropped.
+   *
+   * Assigned in an effect rather than during render: the React Compiler treats
+   * a ref written while rendering as a side effect, and the same pattern is
+   * already used by the detection pipeline.
+   */
+  const startRef = useRef(start);
+  const statusRef = useRef(status);
   useEffect(() => {
-    const release = () => stop();
-    window.addEventListener('pagehide', release);
+    startRef.current = start;
+    statusRef.current = status;
+  }, [start, status]);
+
+  // Release the camera when the page is torn down or frozen, and on unmount.
+  // The `pagehide` listener matters on iOS, where unmount may never run before
+  // the tab is frozen. Intent is deliberately left intact: this is the platform
+  // taking the camera, not the operator giving it up.
+  useEffect(() => {
+    const onPageHide = () => release();
+    window.addEventListener('pagehide', onPageHide);
     return () => {
-      window.removeEventListener('pagehide', release);
+      window.removeEventListener('pagehide', onPageHide);
       release();
     };
-  }, [stop]);
+  }, [release]);
+
+  /*
+   * Resume after the platform took the camera away.
+   *
+   * `pageshow` and `visibilitychange` are both listened for because neither is
+   * reliable alone: a page restored from the back/forward cache fires only
+   * `pageshow`, while a tab merely backgrounded fires only `visibilitychange`.
+   * Both are cheap and the predicate makes a duplicate call a no-op.
+   */
+  useEffect(() => {
+    const resume = () => {
+      const ready = shouldResumeCamera({
+        wanted: wantedRef.current,
+        hasStream: streamRef.current !== null,
+        starting: startingRef.current,
+        visible: document.visibilityState === 'visible',
+        denied: statusRef.current === 'denied',
+      });
+      if (!ready) return;
+      void startRef.current(lastRequestRef.current);
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+    };
+  }, []);
 
   // Keep the device list current when cameras are attached or removed.
   useEffect(() => {
